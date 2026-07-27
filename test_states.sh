@@ -108,9 +108,13 @@ check "the title does not badge the dormant session" \
   "" "$(printf '%s' "$title" | grep -o 'exploratom')"
 
 
+# A literal age here races the wall clock: the fixture stamps now_ms and the
+# plugin samples date again moments later, so whenever a second boundary
+# falls in that gap the age renders 1s instead of 0s and a literal assertion
+# flakes (measured ~13%). Asserting the pattern instead pins icon, project,
+# label, unit and color without depending on which second it lands in.
 check "the dropdown lists the busy session" \
-  "◐ deltatom — working 0s | color=#83a598" \
-  "$(printf '%s\n' "$menu" | grep -F 'deltatom')"
+  "1" "$(printf '%s\n' "$menu" | grep -cE '^◐ deltatom — working [0-9]+s \| color=#83a598$')"
 
 check "the dropdown lists the dormant session" \
   "1" "$(printf '%s\n' "$menu" | grep -cF '· exploratom — idle')"
@@ -130,6 +134,22 @@ check "a pipe in the project name is escaped in the dropdown" \
 check "a raw pipe in the project name never reaches the output" \
   "" "$(printf '%s\n' "$out" | grep -F 'pipe|farm')"
 
+# Regression for Finding 1: a jq *parse* error aborts that jq process
+# immediately, so a single batched `jq ... file1 file2 ...` call loses every
+# file ordered after the bad one — the shared fixture_dir above can't prove
+# this either way, because `unparseable.json` happens to glob-sort last, so
+# nothing follows it for a batched call to lose. This directory names the
+# bad file first on purpose, so a regression back to batched jq would abort
+# before ever reading the healthy file after it and this check would fail.
+poison_dir=$(mktemp -d)
+cp tests/fixtures/unparseable.json "$poison_dir/0-unparseable.json"
+sed "s/PID_PLACEHOLDER/$$/" tests/fixtures/live_waiting.json > "$poison_dir/1-healthy.json"
+poison_out=$(CLAUDE_SESSIONS_DIR="$poison_dir" ./plugins/claude_sessions.sh)
+rm -rf "$poison_dir"
+
+check "a healthy session sorted after an unparseable file still renders" \
+  "1" "$(printf '%s\n' "$poison_out" | grep -c '● arthur — needs input')"
+
 empty_dir=$(mktemp -d)
 trap 'rm -rf "$fixture_dir" "$empty_dir"' EXIT
 empty_out=$(CLAUDE_SESSIONS_DIR="$empty_dir" ./plugins/claude_sessions.sh)
@@ -140,6 +160,18 @@ check "with no sessions the title counts zero" \
 check "with no sessions the dropdown says so" \
   "No Claude Code sessions | color=#7c6f64" \
   "$(printf '%s\n' "$empty_out" | sed -n '/^---$/,$p' | tail -n +2)"
+
+# SwiftBar launches plugins from a GUI app with its own PATH, so a jq that is
+# merely absent from *that* PATH must say so rather than rendering the same
+# output as "no sessions". /bin has bash but never jq on this machine.
+no_jq_out=$(PATH=/bin "$PWD/plugins/claude_sessions.sh")
+
+check "with jq missing the title warns instead of lying about zero" \
+  "✦ ⚠ | color=#fb4934" "$(printf '%s\n' "$no_jq_out" | sed -n '1p')"
+
+check "with jq missing the dropdown says why" \
+  "jq not found in PATH | color=#fb4934" \
+  "$(printf '%s\n' "$no_jq_out" | sed -n '/^---$/,$p' | tail -n +2)"
 
 if (( failures )); then
   printf '\n%d failure(s)\n' "$failures"
