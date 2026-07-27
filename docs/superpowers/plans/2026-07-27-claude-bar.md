@@ -236,7 +236,7 @@ Make it executable: `chmod +x plugins/claude_sessions.sh`
 
 Run: `./test_states.sh`
 
-Expected: PASS — 17 `ok` lines and `all checks passed`.
+Expected: PASS — 18 `ok` lines and `all checks passed`.
 
 - [ ] **Step 5: Commit**
 
