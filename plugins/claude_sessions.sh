@@ -10,7 +10,6 @@
 set -uo pipefail
 
 SESSIONS_DIR="${CLAUDE_SESSIONS_DIR:-$HOME/.claude/sessions}"
-PLUGIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 COUNTER_ITEM="claude"
 BADGE_PREFIX="claude."

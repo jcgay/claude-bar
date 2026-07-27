@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
-# Raise the Ghostty window whose title contains a marker.
+# Raise the Ghostty window whose title contains a marker, or list the titles.
 #
 # Ghostty is a single process for all its windows, so a session pid cannot be
 # resolved to a window through the process tree. Matching on the window title
-# via the Accessibility API is the only route, which is why the SessionStart
-# hook stamps a marker into the title in the first place.
+# via the Accessibility API is the only route.
 #
-# Requires Accessibility permission for whichever process runs this — SketchyBar
-# in normal use, your terminal when testing by hand.
+# This is a diagnostic, not part of the menu bar indicator's normal operation.
+# Wiring it to a badge click was tried and dropped: it needs a stable, unique
+# marker in the window title, and Claude Code overwrites that title itself
+# whenever it starts working.
+#
+# Requires Accessibility permission for whichever process runs it.
 set -uo pipefail
 
 usage() {
