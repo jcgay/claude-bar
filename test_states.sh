@@ -64,6 +64,54 @@ check "dormant is grey" 0xff7c6f64 "$(state_color dormant)"
 check "needs_input shows a filled dot" "●" "$(state_icon needs_input)"
 check "just_finished shows a hollow dot" "○" "$(state_icon just_finished)"
 
+# --- rendering -------------------------------------------------------------
+# Fixtures carry PID_PLACEHOLDER so we can substitute a pid that is genuinely
+# running (our own) and prove the dead-process filter drops the rest.
+
+fixture_dir=$(mktemp -d)
+trap 'rm -rf "$fixture_dir"' EXIT
+for f in tests/fixtures/*.json; do
+  sed "s/PID_PLACEHOLDER/$$/" "$f" > "$fixture_dir/$(basename "$f")"
+done
+
+render() {
+  local existing=$1
+  printf '%s' "$existing" \
+    | CLAUDE_SESSIONS_DIR="$fixture_dir" ./plugins/claude_sessions.sh --dry-run
+}
+
+out=$(render "")
+
+check "the dead session is skipped" \
+  "" "$(grep -F 'claude.999999' <<<"$out")"
+
+check "the waiting session gets a badge" \
+  "--add
+item
+claude.$$
+right" "$(grep -A3 -m1 -x -- '--add' <<<"$out")"
+
+check "three live sessions are counted" \
+  "label=3" "$(grep -m1 -x 'label=3' <<<"$out")"
+
+check "the counter is tinted by the most urgent state" \
+  "icon.color=0xfffb4934" "$(grep -m1 -x 'icon.color=0xfffb4934' <<<"$out")"
+
+check "the dormant session gets no badge" \
+  "" "$(grep -F 'label=exploratom' <<<"$out")"
+
+check "the busy session gets no badge" \
+  "" "$(grep -F 'label=deltatom' <<<"$out")"
+
+check "the waiting session is labelled with its project" \
+  "label=arthur" "$(grep -m1 -x 'label=arthur' <<<"$out")"
+
+stale=$(render 'claude.424242')
+
+check "a badge with no matching session is removed" \
+  "--remove
+claude.424242" "$(grep -A1 -m1 -x -- '--remove' <<<"$stale")"
+
 if (( failures )); then
   printf '\n%d failure(s)\n' "$failures"
   exit 1

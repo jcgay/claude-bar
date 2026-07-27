@@ -9,6 +9,12 @@
 # grep -q as ordinary control flow.
 set -uo pipefail
 
+SESSIONS_DIR="${CLAUDE_SESSIONS_DIR:-$HOME/.claude/sessions}"
+PLUGIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+COUNTER_ITEM="claude"
+BADGE_PREFIX="claude."
+
 # A session that went idle longer ago than this is forgotten rather than
 # freshly finished, and no longer earns a badge.
 JUST_FINISHED_WINDOW_MS=300000
@@ -78,9 +84,123 @@ most_urgent() {
   printf '%s\n' "$best"
 }
 
+# One TAB-separated record per interactive session:
+#   pid  sessionId  project  status  statusUpdatedAt
+#
+# Read straight from the state files rather than calling `claude agents --json`,
+# which spawns the CLI and costs roughly 200ms — far too much at a 2s refresh.
+read_sessions() {
+  local files
+
+  shopt -s nullglob
+  files=("$SESSIONS_DIR"/*.json)
+  shopt -u nullglob
+
+  (( ${#files[@]} )) || return 0
+
+  jq -r '
+    select(.kind == "interactive")
+    | [ .pid,
+        .sessionId,
+        (.cwd | split("/") | map(select(. != "")) | last),
+        .status,
+        .statusUpdatedAt ]
+    | @tsv
+  ' "${files[@]}" 2>/dev/null
+}
+
+# Print the SketchyBar arguments for the current snapshot, one per line.
+# `existing` is the newline-separated list of claude.* items already on the bar,
+# so we can add what is new and remove what no longer belongs.
+build_args() {
+  local now=$1 existing=$2
+  local -a states=() wanted=()
+  local count=0
+  local pid sid project status updated state item overall drawing
+
+  while IFS=$'\t' read -r pid sid project status updated; do
+    [[ -n "$pid" ]] || continue
+    # Session files outlive a crashed claude, so trust the process, not the file.
+    kill -0 "$pid" 2>/dev/null || continue
+    # A truncated or malformed session file can leave the timestamp non-numeric
+    # or empty; derive_state's arithmetic would throw on that, so skip the
+    # record rather than kill the whole refresh.
+    [[ "$updated" =~ ^[0-9]+$ ]] || continue
+
+    count=$((count + 1))
+    state=$(derive_state "$status" "$updated" "$now")
+    states+=("$state")
+
+    case "$state" in
+      needs_input|just_finished) ;;
+      *) continue ;;
+    esac
+
+    item="${BADGE_PREFIX}${pid}"
+    wanted+=("$item")
+
+    if ! grep -qxF "$item" <<<"$existing"; then
+      printf '%s\n' --add item "$item" right --move "$item" after "$COUNTER_ITEM"
+    fi
+
+    printf '%s\n' --set "$item" \
+      "icon=$(state_icon "$state")" \
+      "icon.color=$(state_color "$state")" \
+      "label=$project" \
+      "label.color=$(state_color "$state")"
+  done < <(read_sessions)
+
+  overall=dormant
+  if (( ${#states[@]} )); then
+    overall=$(printf '%s\n' "${states[@]}" | most_urgent)
+  fi
+
+  if (( count )); then
+    drawing=on
+  else
+    drawing=off
+  fi
+
+  printf '%s\n' --set "$COUNTER_ITEM" \
+    "label=$count" \
+    "icon.color=$(state_color "$overall")" \
+    "label.color=$(state_color "$overall")" \
+    "drawing=$drawing"
+
+  while read -r item; do
+    [[ -n "$item" ]] || continue
+    if ! printf '%s\n' "${wanted[@]:-}" | grep -qxF "$item"; then
+      printf '%s\n' --remove "$item"
+    fi
+  done <<<"$existing"
+}
+
 main() {
-  printf 'not implemented yet\n' >&2
-  return 1
+  local dry_run=0 now existing line
+  local -a args=()
+
+  [[ "${1:-}" == "--dry-run" ]] && dry_run=1
+
+  # BSD date has no %3N, and second resolution is ample for a 5 minute window.
+  now=$(( $(date +%s) * 1000 ))
+
+  if (( dry_run )); then
+    existing=$(cat)
+  else
+    existing=$(sketchybar --query bar | jq -r '.items[]' | grep "^${BADGE_PREFIX}" || true)
+  fi
+
+  while IFS= read -r line; do
+    args+=("$line")
+  done < <(build_args "$now" "$existing")
+
+  (( ${#args[@]} )) || return 0
+
+  if (( dry_run )); then
+    printf '%s\n' "${args[@]}"
+  else
+    sketchybar "${args[@]}"
+  fi
 }
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
