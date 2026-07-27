@@ -1,0 +1,155 @@
+# claude-bar — SketchyBar indicator for interactive Claude Code sessions
+
+**Date:** 2026-07-27
+**Status:** Approved design
+
+## Problem
+
+Three to four Claude Code sessions run in parallel in separate Ghostty windows. macOS
+notifications alone do not make it clear *which* session finished, which one is blocked on a
+permission prompt, and which one is still working. The windows are separate, so tab titles are
+not visible, and `claude agents` (agent view) only presents background sessions as a browsable
+list — it does not surface sessions attached to a terminal.
+
+The goal is a macOS menu bar indicator, always visible regardless of which app has focus, that
+answers "does a session need me, and which one?" at a glance, and brings the right Ghostty
+window forward on click.
+
+## Data source
+
+Claude Code writes one small JSON file per live session to `~/.claude/sessions/<pid>.json`:
+
+```json
+{
+  "pid": 2343,
+  "sessionId": "128508e7-1b19-4453-9f11-fc21022bfeac",
+  "cwd": "/Volumes/sourcecode/claude-bar",
+  "kind": "interactive",
+  "name": "claude-bar-3f",
+  "status": "busy",
+  "statusUpdatedAt": 1785183612143
+}
+```
+
+These files back `claude agents --json`. We read them directly rather than shelling out to the
+CLI, which costs roughly 200 ms per invocation — unacceptable at a 2-second refresh rate.
+
+Two filters apply:
+
+- `kind == "interactive"` — background sessions are already covered by agent view.
+- `kill -0 <pid>` succeeds — session files can outlive a crashed process.
+
+### Verified status values
+
+Sampling a live session's own file at 2 Hz while it was blocked on a user question produced:
+
+```
+39 "status":"busy"
+81 "status":"waiting"
+```
+
+So interactive sessions report three statuses: `busy`, `waiting` (blocked on a permission prompt
+or a question), and `idle` (sitting at the prompt). `waiting` natively covers "this session needs
+you right now", which removes the need for `Notification` hooks to detect that case.
+
+`statusUpdatedAt` gives the timestamp of the last transition, which lets us distinguish "just
+finished" from "forgotten hours ago" without persisting any state of our own.
+
+## Derived display states
+
+| Condition | State | Color (user's gruvbox palette) |
+| --- | --- | --- |
+| `status == "waiting"` | needs input now | `#fb4934` red |
+| `status == "idle"` and age < 5 min | just finished | `#fabd2f` yellow |
+| `status == "busy"` | working | `#83a598` blue |
+| `status == "idle"` and age >= 5 min | dormant — counted, no badge | `#7c6f64` grey |
+
+Urgency ordering, used to tint the counter, is: needs input > just finished > working > dormant.
+A dormant session gets no badge of its own, but grey is still the counter's color when every live
+session is dormant.
+
+"Just finished" uses a sliding 5-minute window rather than a seen/unseen marker. The session file
+cannot tell whether the user has read the result, and a persistent state file would have to be
+reconciled on every tick. The accepted trade-off: after reading a result, its badge lingers for up
+to the remainder of the window.
+
+This mapping is the only non-trivial logic in the project and is the thing the test covers.
+
+## Rendering — hybrid layout
+
+A permanent item named `claude` shows `✦ N` where N is the number of live interactive sessions,
+tinted with the most urgent state currently present. Alongside it, one item per session named
+`claude.<pid>` appears **only** for sessions in *needs input* or *just finished*, labelled with the
+project name. Sessions that are quietly working stay folded into the counter.
+
+```
+── nothing to report ──        ── arthur is blocked ──
+┌───────────┐                  ┌──────────────────────┐
+│  ✦ 3      │                  │  ✦ 3    ● arthur     │
+└───────────┘                  └──────────────────────┘
+```
+
+The bar stays calm at rest and expands only when something needs attention, which keeps menu bar
+width stable in the common case while still naming the project without requiring a hover.
+
+Refresh is `update_freq=2`. On each tick the script reads the session files, queries SketchyBar for
+existing `claude.*` items, then adds items for newly-attention-worthy sessions, removes items for
+sessions that are gone or no longer attention-worthy, and updates the rest.
+
+No `fswatch` daemon and no event-driven trigger: the "just finished" state expires with wall-clock
+time, so periodic evaluation is required regardless. Adding a file watcher would not remove the
+poll, only duplicate it.
+
+## Click to focus
+
+Ghostty runs as a single process for all windows, so walking the process tree from a session's pid
+reaches the application, not the window. Window resolution has to go through the macOS
+Accessibility API, matching on window title. That requires each window to carry a title we control.
+
+**Titling.** Claude Code hooks accept a `terminalSequence` field whose allowlist explicitly permits
+OSC 0/1/2 (window and tab title). A `SessionStart` hook emits OSC 2 to stamp the window with the
+session name, for example `claude-bar-3f`. Because fish does not redraw its prompt while `claude`
+is in the foreground, the title persists for the lifetime of the session.
+
+**Raising.** The item's `click_script` runs an `osascript` that performs `AXRaise` on the window of
+process `ghostty` whose title contains that session name.
+
+One-time setup: grant Accessibility access to SketchyBar in System Settings → Privacy & Security.
+
+## Risks
+
+- **`terminalSequence` support on `SessionStart` is unconfirmed.** The field and its OSC allowlist
+  were found in the Claude Code binary, but not verified on this specific event. This is the first
+  implementation step. Fallback if unsupported: emit the OSC from `fish_title`, detecting a running
+  `claude` in the foreground.
+- **Splits.** The user's Ghostty config binds `ctrl+d` to `new_split:right`. Two sessions sharing a
+  window means the Accessibility window title reflects only the focused split, so a click raises the
+  correct window but not the correct split. There is no workaround through the Accessibility API.
+- **Accessibility permission resets.** Homebrew upgrades of SketchyBar replace the binary, which
+  revokes the grant. Documented in the README as a known re-setup step.
+
+## Components
+
+Each unit has one job and can be exercised on its own.
+
+| File | Responsibility |
+| --- | --- |
+| `plugins/claude_sessions.sh` | Read session files, derive states, reconcile SketchyBar items. ~50 lines of shell + `jq`. |
+| `plugins/claude_focus.sh` | Given a session name, raise the matching Ghostty window. ~10 lines of `osascript`. |
+| `sketchybarrc` | Item declaration, to be merged into the user's own config. |
+| `hooks/settings-snippet.json` | The `SessionStart` hook to paste into `~/.claude/settings.json`. |
+| `test_states.sh` | Feeds fixture session JSON to the state derivation and asserts the resulting states. |
+| `README.md` | Install and setup, including the Accessibility grant. |
+
+Shell plus `jq` rather than a Go binary: the work is reading four 300-byte JSON files and emitting
+`sketchybar` commands, which is exactly the shape of a SketchyBar plugin. A compiled binary would
+add a build step without removing any code.
+
+State derivation lives in a function that takes `(status, statusUpdatedAt, now)` and returns a
+state name, so `test_states.sh` can drive it with fixed timestamps and no live sessions.
+
+## Prerequisites
+
+- `brew install FelixKratz/formulae/sketchybar` — not currently installed on this machine.
+- `jq` — already present at `/usr/bin/jq`.
+- Accessibility permission for SketchyBar.
