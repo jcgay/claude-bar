@@ -116,7 +116,7 @@ most_urgent() {
 # Read straight from the state files rather than calling `claude agents --json`,
 # which spawns the CLI and costs roughly 200ms — far too much at a 2s refresh.
 read_sessions() {
-  local files
+  local files f
 
   shopt -s nullglob
   files=("$SESSIONS_DIR"/*.json)
@@ -124,15 +124,22 @@ read_sessions() {
 
   (( ${#files[@]} )) || return 0
 
-  jq -r '
-    select(.kind == "interactive")
-    | [ .pid,
-        .sessionId,
-        (.cwd | split("/") | map(select(. != "")) | last),
-        .status,
-        .statusUpdatedAt ]
-    | @tsv
-  ' "${files[@]}" 2>/dev/null
+  # One jq invocation per file: a parse error aborts jq immediately, so a
+  # single truncated or malformed file must not take every file after it
+  # down with it. A per-record runtime error (e.g. a null cwd) is already
+  # handled by jq continuing past that record within one invocation, so this
+  # only matters for parse errors.
+  for f in "${files[@]}"; do
+    jq -r '
+      select(.kind == "interactive")
+      | [ .pid,
+          .sessionId,
+          (.cwd | split("/") | map(select(. != "")) | last),
+          .status,
+          .statusUpdatedAt ]
+      | @tsv
+    ' "$f" 2>/dev/null
+  done
 }
 
 # Print the SwiftBar output for the current snapshot: one title line, the `---`
@@ -182,6 +189,15 @@ render() {
 }
 
 main() {
+  # SwiftBar launches plugins from a GUI app with its own PATH, so a missing
+  # jq must say so visibly rather than rendering a plausible "no sessions".
+  if ! command -v jq >/dev/null; then
+    printf '✦ ⚠ | color=#fb4934\n'
+    printf -- '---\n'
+    printf 'jq not found in PATH | color=#fb4934\n'
+    return 0
+  fi
+
   # BSD date has no %3N, and second resolution is ample for a 5 minute window.
   render "$(( $(date +%s) * 1000 ))"
 }
