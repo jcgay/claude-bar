@@ -80,16 +80,20 @@ check "three hours" "3h" "$(format_age 10800000)"
 
 fixture_dir=$(mktemp -d)
 trap 'rm -rf "$fixture_dir"' EXIT
+# live_busy.json carries TIMESTAMP_PLACEHOLDER instead of a static literal, so
+# its age assertion can compare against a real "now" without calling
+# format_age (the function under test) a second time from the test itself.
+now_ms=$(( $(date +%s) * 1000 ))
 for f in tests/fixtures/*.json; do
-  sed "s/PID_PLACEHOLDER/$$/" "$f" > "$fixture_dir/$(basename "$f")"
+  sed -e "s/PID_PLACEHOLDER/$$/" -e "s/TIMESTAMP_PLACEHOLDER/$now_ms/" "$f" > "$fixture_dir/$(basename "$f")"
 done
 
 out=$(CLAUDE_SESSIONS_DIR="$fixture_dir" ./plugins/claude_sessions.sh)
 title=$(printf '%s\n' "$out" | sed -n '1p')
 menu=$(printf '%s\n' "$out" | sed -n '/^---$/,$p' | tail -n +2)
 
-check "the title counts the three well-formed live sessions" \
-  "1" "$(printf '%s' "$title" | grep -c '✦ 3')"
+check "the title counts the four well-formed live sessions" \
+  "1" "$(printf '%s' "$title" | grep -c '✦ 4')"
 
 check "the title badges the waiting session" \
   "arthur" "$(printf '%s' "$title" | sed -n 's/.*● \([a-z]*\).*/\1/p')"
@@ -104,15 +108,8 @@ check "the title does not badge the dormant session" \
   "" "$(printf '%s' "$title" | grep -o 'exploratom')"
 
 
-# The fixture's statusUpdatedAt is a fixed literal, not regenerated per run, so
-# its age against the real wall clock grows with however long it has been since
-# the fixture was authored. Compute the expected age the same way render() does
-# rather than hardcoding it, or this assertion goes stale and flakes.
-busy_updated=1785183600000
-busy_age=$(format_age "$(( $(date +%s) * 1000 - busy_updated ))")
-
 check "the dropdown lists the busy session" \
-  "◐ deltatom — working ${busy_age} | color=#83a598" \
+  "◐ deltatom — working 0s | color=#83a598" \
   "$(printf '%s\n' "$menu" | grep -F 'deltatom')"
 
 check "the dropdown lists the dormant session" \
@@ -126,6 +123,12 @@ check "the dead session appears nowhere" \
 
 check "the malformed timestamp is skipped rather than crashing" \
   "" "$(printf '%s\n' "$out" | grep -o 'broken')"
+
+check "a pipe in the project name is escaped in the dropdown" \
+  "1" "$(printf '%s\n' "$menu" | grep -cF 'pipe∣farm')"
+
+check "a raw pipe in the project name never reaches the output" \
+  "" "$(printf '%s\n' "$out" | grep -F 'pipe|farm')"
 
 empty_dir=$(mktemp -d)
 trap 'rm -rf "$fixture_dir" "$empty_dir"' EXIT

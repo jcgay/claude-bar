@@ -145,6 +145,10 @@ render() {
 
   while IFS=$'\t' read -r pid sid project status updated; do
     [[ -n "$pid" ]] || continue
+    # SwiftBar's line protocol gives `|` meaning (its parameter separator), but
+    # @tsv only escapes tabs and newlines, not `|` — a project directory named
+    # with one would inject bogus parameters and truncate the line.
+    project=${project//|/∣}
     # Session files outlive a crashed claude, so trust the process, not the file.
     kill -0 "$pid" 2>/dev/null || continue
     # A truncated or malformed file must not take down a refresh that runs every
