@@ -1,18 +1,20 @@
 #!/usr/bin/env bash
-# SketchyBar plugin: surface live interactive Claude Code sessions.
+# SwiftBar plugin: surface live interactive Claude Code sessions.
 #
 # Claude Code maintains one small JSON file per live session under
-# ~/.claude/sessions. This script turns those into menu bar items: a permanent
-# counter, plus one badge per session that wants the user's attention.
+# ~/.claude/sessions. This prints a menu bar title summarising them, plus a
+# dropdown listing every one with its state and age.
 #
-# Not `set -e`: the reconciliation loop uses non-zero exits from kill -0 and
-# grep -q as ordinary control flow.
+# SwiftBar reads this script's stdout: lines before the `---` line are the menu
+# bar title, lines after it are the dropdown, and per-line parameters follow a
+# `|`. The refresh interval lives in the installed filename — claude-bar.2s.sh —
+# not in here.
+#
+# Not `set -e`: the read loop uses non-zero exits from kill -0 as ordinary
+# control flow.
 set -uo pipefail
 
 SESSIONS_DIR="${CLAUDE_SESSIONS_DIR:-$HOME/.claude/sessions}"
-
-COUNTER_ITEM="claude"
-BADGE_PREFIX="claude."
 
 # A session that went idle longer ago than this is forgotten rather than
 # freshly finished, and no longer earns a badge.
@@ -41,20 +43,45 @@ derive_state() {
 # Gruvbox, matching the user's Ghostty palette.
 state_color() {
   case "$1" in
-    needs_input)   printf '0xfffb4934\n' ;;
-    just_finished) printf '0xfffabd2f\n' ;;
-    working)       printf '0xff83a598\n' ;;
-    *)             printf '0xff7c6f64\n' ;;
+    needs_input)   printf '#fb4934\n' ;;
+    just_finished) printf '#fabd2f\n' ;;
+    working)       printf '#83a598\n' ;;
+    *)             printf '#7c6f64\n' ;;
   esac
 }
 
-# Only the two attention-worthy states get a badge, so only they need an icon.
 state_icon() {
   case "$1" in
     needs_input)   printf '●\n' ;;
     just_finished) printf '○\n' ;;
-    *)             printf '\n' ;;
+    working)       printf '◐\n' ;;
+    *)             printf '·\n' ;;
   esac
+}
+
+# Wording for the dropdown. The icon alone reads as decoration; the word is what
+# makes a row scannable.
+state_label() {
+  case "$1" in
+    needs_input)   printf 'needs input\n' ;;
+    just_finished) printf 'just finished\n' ;;
+    working)       printf 'working\n' ;;
+    *)             printf 'idle\n' ;;
+  esac
+}
+
+# Coarse human-readable age. Precision past the unit is noise in a menu that
+# redraws every two seconds.
+format_age() {
+  local seconds=$(( $1 / 1000 ))
+
+  if (( seconds < 60 )); then
+    printf '%ds\n' "$seconds"
+  elif (( seconds < 3600 )); then
+    printf '%dm\n' "$(( seconds / 60 ))"
+  else
+    printf '%dh\n' "$(( seconds / 3600 ))"
+  fi
 }
 
 # Collapse the states read from stdin into the single most urgent one, which
@@ -108,98 +135,51 @@ read_sessions() {
   ' "${files[@]}" 2>/dev/null
 }
 
-# Print the SketchyBar arguments for the current snapshot, one per line.
-# `existing` is the newline-separated list of claude.* items already on the bar,
-# so we can add what is new and remove what no longer belongs.
-build_args() {
-  local now=$1 existing=$2
-  local -a states=() wanted=()
-  local count=0
-  local pid sid project status updated state item overall drawing
+# Print the SwiftBar output for the current snapshot: one title line, the `---`
+# separator, then one dropdown row per live session.
+render() {
+  local now=$1
+  local -a states=() rows=()
+  local count=0 badges=""
+  local pid sid project status updated state
 
   while IFS=$'\t' read -r pid sid project status updated; do
     [[ -n "$pid" ]] || continue
     # Session files outlive a crashed claude, so trust the process, not the file.
     kill -0 "$pid" 2>/dev/null || continue
-    # A truncated or malformed session file can leave the timestamp non-numeric
-    # or empty; derive_state's arithmetic would throw on that, so skip the
-    # record rather than kill the whole refresh.
+    # A truncated or malformed file must not take down a refresh that runs every
+    # two seconds, and derive_state's arithmetic would abort on a non-number.
     [[ "$updated" =~ ^[0-9]+$ ]] || continue
 
-    count=$((count + 1))
+    count=$(( count + 1 ))
     state=$(derive_state "$status" "$updated" "$now")
     states+=("$state")
 
+    rows+=("$(state_icon "$state") $project — $(state_label "$state") $(format_age "$(( now - updated ))") | color=$(state_color "$state")")
+
     case "$state" in
-      needs_input|just_finished) ;;
-      *) continue ;;
+      needs_input|just_finished) badges+="  $(state_icon "$state") $project" ;;
     esac
-
-    item="${BADGE_PREFIX}${pid}"
-    wanted+=("$item")
-
-    if ! grep -qxF "$item" <<<"$existing"; then
-      printf '%s\n' --add item "$item" right --move "$item" after "$COUNTER_ITEM"
-    fi
-
-    printf '%s\n' --set "$item" \
-      "icon=$(state_icon "$state")" \
-      "icon.color=$(state_color "$state")" \
-      "label=$project" \
-      "label.color=$(state_color "$state")"
   done < <(read_sessions)
 
-  overall=dormant
+  local overall=dormant
   if (( ${#states[@]} )); then
     overall=$(printf '%s\n' "${states[@]}" | most_urgent)
   fi
 
-  if (( count )); then
-    drawing=on
+  printf '✦ %d%s | color=%s\n' "$count" "$badges" "$(state_color "$overall")"
+  printf -- '---\n'
+
+  if (( ${#rows[@]} )); then
+    printf '%s\n' "${rows[@]}"
   else
-    drawing=off
+    printf 'No Claude Code sessions | color=%s\n' "$(state_color dormant)"
   fi
-
-  printf '%s\n' --set "$COUNTER_ITEM" \
-    "label=$count" \
-    "icon.color=$(state_color "$overall")" \
-    "label.color=$(state_color "$overall")" \
-    "drawing=$drawing"
-
-  while read -r item; do
-    [[ -n "$item" ]] || continue
-    if ! printf '%s\n' "${wanted[@]:-}" | grep -qxF "$item"; then
-      printf '%s\n' --remove "$item"
-    fi
-  done <<<"$existing"
 }
 
 main() {
-  local dry_run=0 now existing line
-  local -a args=()
-
-  [[ "${1:-}" == "--dry-run" ]] && dry_run=1
-
   # BSD date has no %3N, and second resolution is ample for a 5 minute window.
-  now=$(( $(date +%s) * 1000 ))
-
-  if (( dry_run )); then
-    existing=$(cat)
-  else
-    existing=$(sketchybar --query bar | jq -r '.items[]' | grep "^${BADGE_PREFIX}" || true)
-  fi
-
-  while IFS= read -r line; do
-    args+=("$line")
-  done < <(build_args "$now" "$existing")
-
-  (( ${#args[@]} )) || return 0
-
-  if (( dry_run )); then
-    printf '%s\n' "${args[@]}"
-  else
-    sketchybar "${args[@]}"
-  fi
+  render "$(( $(date +%s) * 1000 ))"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then

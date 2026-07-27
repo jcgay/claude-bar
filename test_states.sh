@@ -56,13 +56,23 @@ check "all dormant collapses to dormant" \
 check "no states at all collapses to dormant" \
   dormant "$(printf '' | most_urgent)"
 
-check "needs_input is red" 0xfffb4934 "$(state_color needs_input)"
-check "just_finished is yellow" 0xfffabd2f "$(state_color just_finished)"
-check "working is blue" 0xff83a598 "$(state_color working)"
-check "dormant is grey" 0xff7c6f64 "$(state_color dormant)"
+check "needs_input is red" "#fb4934" "$(state_color needs_input)"
+check "just_finished is yellow" "#fabd2f" "$(state_color just_finished)"
+check "working is blue" "#83a598" "$(state_color working)"
+check "dormant is grey" "#7c6f64" "$(state_color dormant)"
 
 check "needs_input shows a filled dot" "●" "$(state_icon needs_input)"
 check "just_finished shows a hollow dot" "○" "$(state_icon just_finished)"
+check "working shows a half dot" "◐" "$(state_icon working)"
+check "dormant shows a middot" "·" "$(state_icon dormant)"
+
+check "seconds under a minute" "12s" "$(format_age 12000)"
+check "zero is zero seconds" "0s" "$(format_age 0)"
+check "59s stays in seconds" "59s" "$(format_age 59999)"
+check "a minute is minutes" "1m" "$(format_age 60000)"
+check "59m stays in minutes" "59m" "$(format_age 3599999)"
+check "an hour is hours" "1h" "$(format_age 3600000)"
+check "three hours" "3h" "$(format_age 10800000)"
 
 # --- rendering -------------------------------------------------------------
 # Fixtures carry PID_PLACEHOLDER so we can substitute a pid that is genuinely
@@ -74,43 +84,59 @@ for f in tests/fixtures/*.json; do
   sed "s/PID_PLACEHOLDER/$$/" "$f" > "$fixture_dir/$(basename "$f")"
 done
 
-render() {
-  local existing=$1
-  printf '%s' "$existing" \
-    | CLAUDE_SESSIONS_DIR="$fixture_dir" ./plugins/claude_sessions.sh --dry-run
-}
+out=$(CLAUDE_SESSIONS_DIR="$fixture_dir" ./plugins/claude_sessions.sh)
+title=$(printf '%s\n' "$out" | sed -n '1p')
+menu=$(printf '%s\n' "$out" | sed -n '/^---$/,$p' | tail -n +2)
 
-out=$(render "")
+check "the title counts the three well-formed live sessions" \
+  "1" "$(printf '%s' "$title" | grep -c '✦ 3')"
 
-check "the dead session is skipped" \
-  "" "$(grep -F 'claude.999999' <<<"$out")"
+check "the title badges the waiting session" \
+  "arthur" "$(printf '%s' "$title" | sed -n 's/.*● \([a-z]*\).*/\1/p')"
 
-check "the waiting session gets a badge" \
-  "--add
-item
-claude.$$
-right" "$(grep -A3 -m1 -x -- '--add' <<<"$out")"
+check "the title is tinted by the most urgent state" \
+  "color=#fb4934" "$(printf '%s' "$title" | sed -n 's/.*| \(color=[^ ]*\).*/\1/p')"
 
-check "three live sessions are counted" \
-  "label=3" "$(grep -m1 -x 'label=3' <<<"$out")"
+check "the title does not badge the busy session" \
+  "" "$(printf '%s' "$title" | grep -o 'deltatom')"
 
-check "the counter is tinted by the most urgent state" \
-  "icon.color=0xfffb4934" "$(grep -m1 -x 'icon.color=0xfffb4934' <<<"$out")"
+check "the title does not badge the dormant session" \
+  "" "$(printf '%s' "$title" | grep -o 'exploratom')"
 
-check "the dormant session gets no badge" \
-  "" "$(grep -F 'label=exploratom' <<<"$out")"
 
-check "the busy session gets no badge" \
-  "" "$(grep -F 'label=deltatom' <<<"$out")"
+# The fixture's statusUpdatedAt is a fixed literal, not regenerated per run, so
+# its age against the real wall clock grows with however long it has been since
+# the fixture was authored. Compute the expected age the same way render() does
+# rather than hardcoding it, or this assertion goes stale and flakes.
+busy_updated=1785183600000
+busy_age=$(format_age "$(( $(date +%s) * 1000 - busy_updated ))")
 
-check "the waiting session is labelled with its project" \
-  "label=arthur" "$(grep -m1 -x 'label=arthur' <<<"$out")"
+check "the dropdown lists the busy session" \
+  "◐ deltatom — working ${busy_age} | color=#83a598" \
+  "$(printf '%s\n' "$menu" | grep -F 'deltatom')"
 
-stale=$(render 'claude.424242')
+check "the dropdown lists the dormant session" \
+  "1" "$(printf '%s\n' "$menu" | grep -cF '· exploratom — idle')"
 
-check "a badge with no matching session is removed" \
-  "--remove
-claude.424242" "$(grep -A1 -m1 -x -- '--remove' <<<"$stale")"
+check "the dropdown lists the waiting session" \
+  "1" "$(printf '%s\n' "$menu" | grep -cF '● arthur — needs input')"
+
+check "the dead session appears nowhere" \
+  "" "$(printf '%s\n' "$out" | grep -o 'ghost')"
+
+check "the malformed timestamp is skipped rather than crashing" \
+  "" "$(printf '%s\n' "$out" | grep -o 'broken')"
+
+empty_dir=$(mktemp -d)
+trap 'rm -rf "$fixture_dir" "$empty_dir"' EXIT
+empty_out=$(CLAUDE_SESSIONS_DIR="$empty_dir" ./plugins/claude_sessions.sh)
+
+check "with no sessions the title counts zero" \
+  "✦ 0 | color=#7c6f64" "$(printf '%s\n' "$empty_out" | sed -n '1p')"
+
+check "with no sessions the dropdown says so" \
+  "No Claude Code sessions | color=#7c6f64" \
+  "$(printf '%s\n' "$empty_out" | sed -n '/^---$/,$p' | tail -n +2)"
 
 if (( failures )); then
   printf '\n%d failure(s)\n' "$failures"
