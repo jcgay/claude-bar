@@ -153,3 +153,47 @@ state name, so `test_states.sh` can drive it with fixed timestamps and no live s
 - `brew install FelixKratz/formulae/sketchybar` — not currently installed on this machine.
 - `jq` — already present at `/usr/bin/jq`.
 - Accessibility permission for SketchyBar.
+
+---
+
+## Revision: SwiftBar replaces SketchyBar
+
+Everything above was written for SketchyBar and is superseded on two points. The
+data source, the derived states, the five-minute window and the colors are
+unchanged.
+
+**Why.** SketchyBar draws its own bar rather than adding an item to the native
+macOS menu bar, which means adopting it as a whole-menu-bar replacement. That was
+not understood when it was chosen over SwiftBar on looks, and it is far more
+commitment than this indicator warrants. SwiftBar puts a normal item in the
+existing menu bar.
+
+**What changes.**
+
+A SwiftBar plugin is an executable named `{name}.{interval}.{ext}` — here
+`claude-bar.2s.sh` — whose stdout is the output. Lines before a `---` line are the
+menu bar title; lines after it are the dropdown. Per-line parameters follow a `|`,
+for example `| color=#fb4934`.
+
+This removes the entire item-reconciliation layer: no `--add`/`--set`/`--remove`,
+no querying the bar for existing items, no `--dry-run` mode taking the current
+item list on stdin. The script prints its state and exits. Testing gets simpler
+too — stdout is the whole result, so assertions read it directly.
+
+Colors move from SketchyBar's `0xAARRGGBB` to CSS hex `#RRGGBB`.
+
+**The dropdown changes the layout trade-off.** The hybrid title existed because
+menu bar width was scarce, so quietly-working sessions had to stay folded into the
+counter. With a dropdown available for free, the title keeps that hybrid form —
+counter plus a badge for whatever needs attention — and the dropdown lists *every*
+live session with its state and age, including the working and dormant ones the
+title omits.
+
+All four states therefore need an icon now, not just the two that earn a badge:
+`●` needs input, `◐` working, `○` just finished, `·` dormant.
+
+**Click-to-focus stays cancelled.** SwiftBar would make the click plumbing trivial
+via `| bash=... terminal=false`, but the blocker was never the plumbing: Claude
+Code overwrites Ghostty window titles whenever it starts working, so no stable
+marker survives for the Accessibility API to match on. `plugins/claude_focus.sh`
+remains a diagnostic.

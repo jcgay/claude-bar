@@ -4,17 +4,22 @@
 
 **Goal:** A macOS menu bar indicator that shows which interactive Claude Code sessions need attention across several Ghostty windows.
 
-**Architecture:** A SketchyBar plugin polls `~/.claude/sessions/*.json` every two seconds, derives a display state per session from `status` and `statusUpdatedAt`, and reconciles SketchyBar items — a permanent counter plus one badge per session that wants attention.
+**Architecture:** A SwiftBar plugin reads `~/.claude/sessions/*.json` every two seconds, derives a display state per session from `status` and `statusUpdatedAt`, and prints a menu bar title — a counter plus a badge for whatever needs attention — followed by a dropdown listing every live session.
 
-> **Revised mid-execution.** The plan originally ended with click-to-focus: a `SessionStart` hook stamping a marker into each Ghostty window title, and a `click_script` raising the matching window through the Accessibility API. Task 3 built the window-raising half, then enumerating the live windows showed Claude Code writes those titles itself whenever it starts working — so the marker would be gone from exactly the sessions that earn a badge. The user chose to drop click-to-focus rather than carry a second hook to re-stamp on `Stop` and `Notification`. Original Tasks 4 and 5 are replaced by the revised Task 4 below. Task 3 stands as a diagnostic.
+> **Revised twice mid-execution.** Read Tasks 1 through 3 as history: they were written for SketchyBar and their code has since been superseded.
+>
+> **First revision (Task 4).** The plan originally ended with click-to-focus: a `SessionStart` hook stamping a marker into each Ghostty window title, and a click handler raising the matching window through the Accessibility API. Task 3 built the window-raising half, then enumerating the live windows showed Claude Code writes those titles itself whenever it starts working — so the marker would be gone from exactly the sessions that earn a badge. The user chose to drop click-to-focus rather than carry a second hook to re-stamp on `Stop` and `Notification`. Original Tasks 4 and 5 became the revised Task 4. `plugins/claude_focus.sh` stands as a diagnostic.
+>
+> **Second revision (Tasks 5 and 6).** SketchyBar draws its own bar rather than adding an item to the native macOS menu bar, so adopting it means replacing the menu bar wholesale — not what the user intended when choosing it over SwiftBar on looks. SwiftBar adds an ordinary item to the menu bar already there. Task 5 ports the renderer; Task 6 swaps the installs and rewrites the docs. The state logic from Task 1 survives unchanged apart from the color format.
 
-**Tech Stack:** Bash, `jq` (already at `/usr/bin/jq`), SketchyBar (to be installed), `osascript` / macOS Accessibility API.
+**Tech Stack:** Bash, `jq` (already at `/usr/bin/jq`), SwiftBar, `osascript` / macOS Accessibility API.
 
 ## Global Constraints
 
 - All code, comments, and commit messages in English. Commit subjects are prefixed with a gitmoji, and bodies explain the context behind the change, not just the diff.
-- Bash with `#!/usr/bin/env bash` and `set -uo pipefail`. Not `set -e`: the reconciliation loop relies on non-zero exits from `kill -0` and `grep -q` as ordinary control flow.
-- Colors are SketchyBar `0xAARRGGBB` literals taken from the user's gruvbox Ghostty palette: needs input `0xfffb4934`, just finished `0xfffabd2f`, working `0xff83a598`, dormant `0xff7c6f64`.
+- Bash with `#!/usr/bin/env bash` and `set -uo pipefail`. Not `set -e`: the read loop relies on non-zero exits from `kill -0` as ordinary control flow.
+- Colors come from the user's gruvbox Ghostty palette: needs input `#fb4934`, just finished `#fabd2f`, working `#83a598`, dormant `#7c6f64`. Tasks 1 through 4 wrote them as SketchyBar `0xAARRGGBB` literals; Task 5 moves them to CSS hex.
+- Icons: `●` needs input, `○` just finished, `◐` working, `·` dormant.
 - State names used throughout: `needs_input`, `just_finished`, `working`, `dormant`.
 - The just-finished window is 300000 ms (5 minutes).
 - `SESSIONS_DIR` defaults to `$HOME/.claude/sessions` and is overridable via `CLAUDE_SESSIONS_DIR` so tests can point at fixtures.
@@ -24,12 +29,13 @@
 
 | File | Responsibility |
 | --- | --- |
-| `plugins/claude_sessions.sh` | Everything the SketchyBar item runs: read session files, derive states, emit and apply SketchyBar arguments. Sourceable so tests can call its functions. |
+| `plugins/claude_sessions.sh` | The whole plugin: read session files, derive states, print the menu bar title and dropdown. Sourceable so tests can call its functions. Installed as `~/.config/swiftbar/claude-bar.2s.sh`. |
 | `plugins/claude_focus.sh` | Diagnostic: list Ghostty window titles, or raise the window whose title contains a given marker. |
-| `sketchybarrc.example` | The item declaration to merge into the user's own SketchyBar config. |
-| `test_states.sh` | Sources `claude_sessions.sh` and asserts state derivation, urgency ordering, and dry-run rendering against fixtures. |
+| `test_states.sh` | Sources `claude_sessions.sh` and asserts state derivation, urgency ordering, colors, icons, age formatting, and the rendered output against fixtures. |
 | `tests/fixtures/` | Session JSON fixtures used by `test_states.sh`. |
-| `README.md` | Install, how it works, and why clicking a badge does nothing. |
+| `README.md` | Install, how it works, and why clicking does nothing. |
+
+`sketchybarrc.example` existed through Task 4 and is deleted by Task 5.
 
 ---
 
@@ -923,6 +929,511 @@ comment corrected to say so.
 The README leads with what the indicator does and states plainly that clicking a
 badge does nothing, since a menu bar item that looks clickable and isn't will
 otherwise be read as broken.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+EOF
+```
+
+---
+
+### Task 5: Port the renderer to SwiftBar
+
+SketchyBar is out — it draws its own bar rather than adding an item to the native macOS menu bar, which the user did not intend to adopt. SwiftBar puts a normal item in the existing menu bar. See the spec's "Revision: SwiftBar replaces SketchyBar" section for the full reasoning.
+
+This task is pure code: swap the rendering layer, leave the machine alone. Task 6 handles installs and docs.
+
+A SwiftBar plugin's stdout *is* its output. Lines before a `---` line are the menu bar title; lines after it are the dropdown. Per-line parameters follow a `|`. So the entire item-reconciliation layer goes away — no `--add`/`--set`/`--remove`, no querying the bar, no `--dry-run` reading the current item list from stdin. The script prints and exits, which also makes the tests simpler: assert on stdout.
+
+Three of the deferred minor findings dissolve with the code that carried them: the `BADGE_PREFIX` regex-dot, the unreachable `(( ${#args[@]} ))` guard, and `state_icon`'s untested `*` branch — all four states need an icon now, because the dropdown shows every session.
+
+**Files:**
+- Modify: `plugins/claude_sessions.sh` (replace `build_args` and `main`; change `state_color`'s format; add `state_label`, `format_age`; extend `state_icon`)
+- Modify: `test_states.sh` (rewrite the rendering section, update the color assertions, add icon and age assertions)
+- Create: `tests/fixtures/malformed.json`
+- Delete: `sketchybarrc.example`
+
+**Interfaces:**
+- Consumes: `derive_state`, `most_urgent`, `read_sessions` — all unchanged.
+- Produces: the finished plugin. Task 6 installs it as `claude-bar.2s.sh` and documents it.
+
+- [ ] **Step 1: Write the failing tests**
+
+In `test_states.sh`, change the four color assertions to CSS hex:
+
+```bash
+check "needs_input is red" "#fb4934" "$(state_color needs_input)"
+check "just_finished is yellow" "#fabd2f" "$(state_color just_finished)"
+check "working is blue" "#83a598" "$(state_color working)"
+check "dormant is grey" "#7c6f64" "$(state_color dormant)"
+```
+
+Add icon assertions for the two states that previously had none, beside the two existing ones:
+
+```bash
+check "working shows a half dot" "◐" "$(state_icon working)"
+check "dormant shows a middot" "·" "$(state_icon dormant)"
+```
+
+Add age formatting assertions:
+
+```bash
+check "seconds under a minute" "12s" "$(format_age 12000)"
+check "zero is zero seconds" "0s" "$(format_age 0)"
+check "59s stays in seconds" "59s" "$(format_age 59999)"
+check "a minute is minutes" "1m" "$(format_age 60000)"
+check "59m stays in minutes" "59m" "$(format_age 3599999)"
+check "an hour is hours" "1h" "$(format_age 3600000)"
+check "three hours" "3h" "$(format_age 10800000)"
+```
+
+Create `tests/fixtures/malformed.json` — a live pid whose timestamp is not a number, which must be skipped rather than crashing the arithmetic:
+
+```json
+{"pid":PID_PLACEHOLDER,"sessionId":"eeeeeeee-1111-2222-3333-444444444444","cwd":"/Volumes/sourcecode/broken","kind":"interactive","name":"broken-77","status":"waiting","statusUpdatedAt":"not-a-number"}
+```
+
+Then replace the whole `# --- rendering ---` section from Task 2 with this one. The fixture setup at the top is unchanged; only the assertions differ.
+
+```bash
+# --- rendering -------------------------------------------------------------
+# Fixtures carry PID_PLACEHOLDER so we can substitute a pid that is genuinely
+# running (our own) and prove the dead-process filter drops the rest.
+
+fixture_dir=$(mktemp -d)
+trap 'rm -rf "$fixture_dir"' EXIT
+for f in tests/fixtures/*.json; do
+  sed "s/PID_PLACEHOLDER/$$/" "$f" > "$fixture_dir/$(basename "$f")"
+done
+
+out=$(CLAUDE_SESSIONS_DIR="$fixture_dir" ./plugins/claude_sessions.sh)
+title=$(printf '%s\n' "$out" | sed -n '1p')
+menu=$(printf '%s\n' "$out" | sed -n '/^---$/,$p' | tail -n +2)
+
+check "the title counts the three well-formed live sessions" \
+  "1" "$(printf '%s' "$title" | grep -c '✦ 3')"
+
+check "the title badges the waiting session" \
+  "arthur" "$(printf '%s' "$title" | sed -n 's/.*● \([a-z]*\).*/\1/p')"
+
+check "the title is tinted by the most urgent state" \
+  "color=#fb4934" "$(printf '%s' "$title" | sed -n 's/.*| \(color=[^ ]*\).*/\1/p')"
+
+check "the title does not badge the busy session" \
+  "" "$(printf '%s' "$title" | grep -o 'deltatom')"
+
+check "the title does not badge the dormant session" \
+  "" "$(printf '%s' "$title" | grep -o 'exploratom')"
+
+check "the dropdown lists the busy session" \
+  "◐ deltatom — working 0s | color=#83a598" \
+  "$(printf '%s\n' "$menu" | grep -F 'deltatom')"
+
+check "the dropdown lists the dormant session" \
+  "1" "$(printf '%s\n' "$menu" | grep -cF '· exploratom — idle')"
+
+check "the dropdown lists the waiting session" \
+  "1" "$(printf '%s\n' "$menu" | grep -cF '● arthur — needs input')"
+
+check "the dead session appears nowhere" \
+  "" "$(printf '%s\n' "$out" | grep -o 'ghost')"
+
+check "the malformed timestamp is skipped rather than crashing" \
+  "" "$(printf '%s\n' "$out" | grep -o 'broken')"
+
+empty_dir=$(mktemp -d)
+trap 'rm -rf "$fixture_dir" "$empty_dir"' EXIT
+empty_out=$(CLAUDE_SESSIONS_DIR="$empty_dir" ./plugins/claude_sessions.sh)
+
+check "with no sessions the title counts zero" \
+  "✦ 0 | color=#7c6f64" "$(printf '%s\n' "$empty_out" | sed -n '1p')"
+
+check "with no sessions the dropdown says so" \
+  "No Claude Code sessions | color=#7c6f64" \
+  "$(printf '%s\n' "$empty_out" | sed -n '/^---$/,$p' | tail -n +2)"
+```
+
+Note that all live fixtures share the test's pid, so the dropdown will contain several rows whose project names differ — that is what makes the per-project assertions meaningful.
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+Run: `./test_states.sh`
+
+Expected: FAIL. The color, icon and age assertions fail because `state_color` still emits `0xAARRGGBB`, `state_icon` returns empty for working and dormant, and `format_age` does not exist. The rendering assertions fail because the script still expects a `--dry-run` flag and stdin.
+
+- [ ] **Step 3: Write the implementation**
+
+In `plugins/claude_sessions.sh`, replace the header comment with:
+
+```bash
+#!/usr/bin/env bash
+# SwiftBar plugin: surface live interactive Claude Code sessions.
+#
+# Claude Code maintains one small JSON file per live session under
+# ~/.claude/sessions. This prints a menu bar title summarising them, plus a
+# dropdown listing every one with its state and age.
+#
+# SwiftBar reads this script's stdout: lines before the `---` line are the menu
+# bar title, lines after it are the dropdown, and per-line parameters follow a
+# `|`. The refresh interval lives in the installed filename — claude-bar.2s.sh —
+# not in here.
+#
+# Not `set -e`: the read loop uses non-zero exits from kill -0 as ordinary
+# control flow.
+```
+
+Change `state_color` to CSS hex:
+
+```bash
+# Gruvbox, matching the user's Ghostty palette.
+state_color() {
+  case "$1" in
+    needs_input)   printf '#fb4934\n' ;;
+    just_finished) printf '#fabd2f\n' ;;
+    working)       printf '#83a598\n' ;;
+    *)             printf '#7c6f64\n' ;;
+  esac
+}
+```
+
+Extend `state_icon` so every state has one — the dropdown shows them all, not just the two that earn a badge:
+
+```bash
+state_icon() {
+  case "$1" in
+    needs_input)   printf '●\n' ;;
+    just_finished) printf '○\n' ;;
+    working)       printf '◐\n' ;;
+    *)             printf '·\n' ;;
+  esac
+}
+```
+
+Add, after `state_icon`:
+
+```bash
+# Wording for the dropdown. The icon alone reads as decoration; the word is what
+# makes a row scannable.
+state_label() {
+  case "$1" in
+    needs_input)   printf 'needs input\n' ;;
+    just_finished) printf 'just finished\n' ;;
+    working)       printf 'working\n' ;;
+    *)             printf 'idle\n' ;;
+  esac
+}
+
+# Coarse human-readable age. Precision past the unit is noise in a menu that
+# redraws every two seconds.
+format_age() {
+  local seconds=$(( $1 / 1000 ))
+
+  if (( seconds < 60 )); then
+    printf '%ds\n' "$seconds"
+  elif (( seconds < 3600 )); then
+    printf '%dm\n' "$(( seconds / 60 ))"
+  else
+    printf '%dh\n' "$(( seconds / 3600 ))"
+  fi
+}
+```
+
+Delete `build_args` entirely and replace it, plus `main`, with:
+
+```bash
+# Print the SwiftBar output for the current snapshot: one title line, the `---`
+# separator, then one dropdown row per live session.
+render() {
+  local now=$1
+  local -a states=() rows=()
+  local count=0 badges=""
+  local pid sid project status updated state
+
+  while IFS=$'\t' read -r pid sid project status updated; do
+    [[ -n "$pid" ]] || continue
+    # Session files outlive a crashed claude, so trust the process, not the file.
+    kill -0 "$pid" 2>/dev/null || continue
+    # A truncated or malformed file must not take down a refresh that runs every
+    # two seconds, and derive_state's arithmetic would abort on a non-number.
+    [[ "$updated" =~ ^[0-9]+$ ]] || continue
+
+    count=$(( count + 1 ))
+    state=$(derive_state "$status" "$updated" "$now")
+    states+=("$state")
+
+    rows+=("$(state_icon "$state") $project — $(state_label "$state") $(format_age "$(( now - updated ))") | color=$(state_color "$state")")
+
+    case "$state" in
+      needs_input|just_finished) badges+="  $(state_icon "$state") $project" ;;
+    esac
+  done < <(read_sessions)
+
+  local overall=dormant
+  if (( ${#states[@]} )); then
+    overall=$(printf '%s\n' "${states[@]}" | most_urgent)
+  fi
+
+  printf '✦ %d%s | color=%s\n' "$count" "$badges" "$(state_color "$overall")"
+  printf -- '---\n'
+
+  if (( ${#rows[@]} )); then
+    printf '%s\n' "${rows[@]}"
+  else
+    printf 'No Claude Code sessions | color=%s\n' "$(state_color dormant)"
+  fi
+}
+
+main() {
+  # BSD date has no %3N, and second resolution is ample for a 5 minute window.
+  render "$(( $(date +%s) * 1000 ))"
+}
+```
+
+Leave `derive_state`, `most_urgent`, `read_sessions`, `SESSIONS_DIR`, `JUST_FINISHED_WINDOW_MS` and the sourcing guard exactly as they are. Delete the now-unused `COUNTER_ITEM` and `BADGE_PREFIX` constants.
+
+Then delete the SketchyBar config: `git rm sketchybarrc.example`
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+Run: `./test_states.sh`
+
+Expected: PASS, output pristine.
+
+Then look at the real output by eye, since a menu is a visual thing:
+
+Run: `./plugins/claude_sessions.sh`
+
+Expected: a title line like `✦ 4  ○ claude-bar | color=#fabd2f`, then `---`, then one row per live session on this machine. Sanity-check that the project names and states match what you would expect from `ls ~/.claude/sessions`.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add -A plugins/claude_sessions.sh test_states.sh tests/fixtures/malformed.json sketchybarrc.example
+git commit -F - <<'EOF'
+♻️ Port the renderer from SketchyBar to SwiftBar
+
+SketchyBar draws its own bar instead of adding an item to the native macOS menu
+bar, so adopting it means replacing the menu bar wholesale. That was not
+understood when it was picked over SwiftBar on looks, and it is far more
+commitment than a session indicator warrants. SwiftBar adds an ordinary item to
+the menu bar already there.
+
+The rewrite is mostly subtraction. A SwiftBar plugin's stdout is its output —
+lines before `---` are the menu bar title, lines after it are the dropdown — so
+the entire item-reconciliation layer goes: no add/set/remove, no querying the bar
+for what already exists, no --dry-run mode taking the current item list on stdin.
+The script prints and exits. The tests get simpler with it, asserting on stdout
+rather than on a synthetic argument list.
+
+The state logic is untouched. derive_state, most_urgent and read_sessions carry
+over verbatim; only the color format changes, from SketchyBar's 0xAARRGGBB to CSS
+hex.
+
+Having a dropdown changes one design trade-off. The hybrid title existed because
+menu bar width was scarce, forcing quietly-working sessions to stay folded into
+the counter. The title keeps that shape, but the dropdown now lists every live
+session with its state and age — so the information the title omits is one click
+away rather than lost. That is why all four states need an icon now, where
+previously only the two that earn a badge did.
+
+Three deferred findings dissolve with the code that carried them: the badge-prefix
+regex whose dot was an unescaped wildcard, the unreachable empty-argument guard in
+main, and state_icon's untested fallback branch. The fourth — a malformed
+statusUpdatedAt verified only by hand — now has a committed fixture.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+EOF
+```
+
+---
+
+### Task 6: Swap the installs and rewrite the docs
+
+Take SketchyBar off the machine, put SwiftBar on it, and make the README describe what actually ships.
+
+**Files:**
+- Modify: `README.md`
+- Modify: `plugins/claude_focus.sh` (one wording fix)
+
+**Interfaces:**
+- Consumes: everything from Tasks 1 through 5.
+- Produces: nothing further depends on this task.
+
+- [ ] **Step 1: Remove SketchyBar**
+
+The user has approved removing it entirely. Nothing here predates this project — `~/.config/sketchybar` was created by Task 2 and contained no prior configuration.
+
+```bash
+brew services stop sketchybar
+rm -rf ~/.config/sketchybar
+brew uninstall sketchybar
+```
+
+Verify: `brew services list | grep sketchybar` returns nothing, and `ls ~/.config/sketchybar` reports no such directory.
+
+- [ ] **Step 2: Install SwiftBar**
+
+```bash
+brew install --cask swiftbar
+```
+
+SwiftBar asks for a plugin folder on first launch, through a GUI dialog with no CLI equivalent. **Do not try to script around it.** Create the folder and report that the user must launch SwiftBar once and point it there:
+
+```bash
+mkdir -p ~/.config/swiftbar
+```
+
+- [ ] **Step 3: Install the plugin**
+
+The refresh interval lives in the filename, and the file must be executable:
+
+```bash
+ln -sfn "$PWD/plugins/claude_sessions.sh" ~/.config/swiftbar/claude-bar.2s.sh
+ls -l ~/.config/swiftbar/
+```
+
+Expected: the symlink exists and resolves to the checkout.
+
+- [ ] **Step 4: Fix the imprecise wording**
+
+`plugins/claude_focus.sh`'s header says Ghostty is "a single process for all its windows", which is correct. The README will reuse that phrasing rather than the looser "one process for every window", which reads distributively and contradicts the reason given alongside it. Nothing to change in `claude_focus.sh` itself — confirm with `grep -n 'single process' plugins/claude_focus.sh` that the precise phrasing is the one already there, and use it in the README.
+
+- [ ] **Step 5: Rewrite the README**
+
+Replace `README.md` entirely:
+
+````markdown
+# claude-bar
+
+A SwiftBar plugin that shows, in the macOS menu bar, which of your running Claude
+Code sessions need attention. Built for keeping three or four of them open in
+separate terminal windows, where OS notifications don't say which one fired.
+
+```
+menu bar:  ✦ 3  ● arthur
+
+── dropdown ──────────────────
+ ● arthur      needs input 8s
+ ◐ deltatom    working 1m
+ ○ exploratom  just finished 2m
+ · claude-bar  idle 3h
+```
+
+The title shows how many interactive sessions are alive, tinted by the most
+urgent one, and names any that want you. The dropdown lists them all.
+
+| Icon | State | Color |
+| --- | --- | --- |
+| `●` | Blocked on a permission prompt or a question | red |
+| `○` | Finished within the last five minutes | yellow |
+| `◐` | Working | blue |
+| `·` | Idle for over five minutes | grey |
+
+Only the first two earn a place in the title; the other two live in the dropdown
+so the menu bar stays quiet.
+
+"Finished" uses a sliding five-minute window. Claude Code's session files record
+when a session last changed state but not whether you have read the result, so a
+row you have already dealt with keeps its yellow for the rest of the window.
+
+## Install
+
+```bash
+brew install --cask swiftbar
+mkdir -p ~/.config/swiftbar
+```
+
+Launch SwiftBar once and point it at `~/.config/swiftbar` when it asks for a
+plugin folder. Then, from your checkout of this repository:
+
+```bash
+ln -sfn "$PWD/plugins/claude_sessions.sh" ~/.config/swiftbar/claude-bar.2s.sh
+```
+
+The `2s` in that filename is the refresh interval — SwiftBar reads it from the
+name, so there is no configuration file. Symlinking rather than copying keeps the
+checkout as the source of truth, so `git pull` is all an update takes.
+
+`jq` is required and ships with macOS at `/usr/bin/jq`.
+
+## How it works
+
+Claude Code writes one JSON file per live session to `~/.claude/sessions/<pid>.json`,
+carrying `status` (`busy`, `waiting`, `idle`), `statusUpdatedAt`, `cwd` and
+`sessionId`. The plugin reads those files directly. Calling `claude agents --json`
+would return the same data but spawns the CLI at roughly 200 ms per invocation,
+far too slow at this refresh rate.
+
+Session files outlive a crashed `claude`, so liveness comes from `kill -0` on the
+pid rather than from the file existing.
+
+A SwiftBar plugin's stdout is its output: lines before `---` are the menu bar
+title, lines after it are the dropdown, and per-line parameters follow a `|`. So
+the whole plugin is one script that prints and exits — you can see exactly what
+the menu bar will show by running it:
+
+```bash
+./plugins/claude_sessions.sh
+```
+
+## Clicking does nothing
+
+This was tried and dropped. Ghostty is a single process for all its windows, so a
+session pid cannot be resolved to a window through the process tree — the only
+route is the macOS Accessibility API, which identifies windows solely by title.
+That needs a stable, unique marker in each title, and Claude Code writes the
+window title itself whenever it starts working, overwriting anything we put
+there. The dropdown tells you which project wants you; finding the window is
+manual.
+
+`plugins/claude_focus.sh` survives as a diagnostic:
+
+```bash
+./plugins/claude_focus.sh --list       # print every Ghostty window title
+./plugins/claude_focus.sh some-marker  # raise the first window whose title matches
+```
+
+Both need Accessibility permission for the process running them — add your
+terminal in System Settings → Privacy & Security → Accessibility.
+
+## Development
+
+```bash
+./test_states.sh
+```
+
+Covers state derivation, urgency ordering, colors, icons, age formatting, and the
+rendered output against fixtures in `tests/fixtures/`. The fixtures carry a pid
+placeholder that the test rewrites to its own pid, so the dead-process filter and
+the malformed-timestamp guard are exercised for real.
+````
+
+- [ ] **Step 6: Verify the plugin runs from where SwiftBar will call it**
+
+Run: `~/.config/swiftbar/claude-bar.2s.sh`
+
+Expected: the same title-and-dropdown output as running it from the checkout. This confirms the symlink resolves and the script does not depend on its working directory.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add README.md
+git commit -F - <<'EOF'
+📝 Document the SwiftBar install and retire SketchyBar
+
+SketchyBar is off the machine: service stopped, ~/.config/sketchybar removed —
+it held nothing predating this project — and the Homebrew package uninstalled.
+SwiftBar replaces it.
+
+The README now describes what ships. Two things it states plainly because both
+would otherwise read as bugs: the refresh interval lives in the installed
+filename rather than any config file, which is surprising the first time you see
+it; and clicking the menu bar item does nothing, with the reason, because an item
+that looks clickable and isn't invites a bug report.
+
+It also documents that running the plugin by hand prints exactly what the menu
+bar will show. That falls out of SwiftBar's design and makes the thing far easier
+to debug than the previous reconciliation-based renderer, so it is worth saying
+out loud.
 
 Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
 EOF
