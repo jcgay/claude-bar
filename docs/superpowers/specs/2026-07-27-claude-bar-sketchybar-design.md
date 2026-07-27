@@ -197,3 +197,8 @@ via `| bash=... terminal=false`, but the blocker was never the plumbing: Claude
 Code overwrites Ghostty window titles whenever it starts working, so no stable
 marker survives for the Accessibility API to match on. `plugins/claude_focus.sh`
 remains a diagnostic.
+
+**The Components table above is also superseded.** `sketchybarrc` was deleted
+along with the rest of the SketchyBar item-reconciliation layer, and
+`hooks/settings-snippet.json` was never written — SwiftBar needs no
+`SessionStart` hook. Neither exists in this repository.

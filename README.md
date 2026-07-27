@@ -5,7 +5,7 @@ Code sessions need attention. Built for keeping three or four of them open in
 separate terminal windows, where OS notifications don't say which one fired.
 
 ```
-menu bar:  ✦ 3  ● arthur
+menu bar:  ✦ 4  ● arthur  ○ exploratom
 
 ── dropdown ──────────────────
  ● arthur      needs input 8s

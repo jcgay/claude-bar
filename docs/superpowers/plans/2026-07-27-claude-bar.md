@@ -1009,8 +1009,8 @@ out=$(CLAUDE_SESSIONS_DIR="$fixture_dir" ./plugins/claude_sessions.sh)
 title=$(printf '%s\n' "$out" | sed -n '1p')
 menu=$(printf '%s\n' "$out" | sed -n '/^---$/,$p' | tail -n +2)
 
-check "the title counts the three well-formed live sessions" \
-  "1" "$(printf '%s' "$title" | grep -c '✦ 3')"
+check "the title counts the four well-formed live sessions" \
+  "1" "$(printf '%s' "$title" | grep -c '✦ 4')"
 
 check "the title badges the waiting session" \
   "arthur" "$(printf '%s' "$title" | sed -n 's/.*● \([a-z]*\).*/\1/p')"
