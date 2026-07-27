@@ -50,7 +50,10 @@ case "${1:-}" in
   "")      usage ;;
   --list)  list_windows ;;
   *)
-    result=$(raise_window "$1")
+    if ! result=$(raise_window "$1"); then
+      printf 'could not query Ghostty windows\n' >&2
+      exit 1
+    fi
     printf '%s\n' "$result"
     [[ "$result" == "raised" ]] || exit 1
     ;;
