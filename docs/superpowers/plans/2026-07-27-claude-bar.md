@@ -2,9 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** A macOS menu bar indicator that shows which interactive Claude Code sessions need attention across several Ghostty windows, and raises the right window on click.
+**Goal:** A macOS menu bar indicator that shows which interactive Claude Code sessions need attention across several Ghostty windows.
 
-**Architecture:** A SketchyBar plugin polls `~/.claude/sessions/*.json` every two seconds, derives a display state per session from `status` and `statusUpdatedAt`, and reconciles SketchyBar items — a permanent counter plus one badge per session that wants attention. A `SessionStart` hook stamps each Ghostty window title with a marker derived from the session id, which the click handler uses to raise that window through the Accessibility API.
+**Architecture:** A SketchyBar plugin polls `~/.claude/sessions/*.json` every two seconds, derives a display state per session from `status` and `statusUpdatedAt`, and reconciles SketchyBar items — a permanent counter plus one badge per session that wants attention.
+
+> **Revised mid-execution.** The plan originally ended with click-to-focus: a `SessionStart` hook stamping a marker into each Ghostty window title, and a `click_script` raising the matching window through the Accessibility API. Task 3 built the window-raising half, then enumerating the live windows showed Claude Code writes those titles itself whenever it starts working — so the marker would be gone from exactly the sessions that earn a badge. The user chose to drop click-to-focus rather than carry a second hook to re-stamp on `Stop` and `Notification`. Original Tasks 4 and 5 are replaced by the revised Task 4 below. Task 3 stands as a diagnostic.
 
 **Tech Stack:** Bash, `jq` (already at `/usr/bin/jq`), SketchyBar (to be installed), `osascript` / macOS Accessibility API.
 
@@ -23,12 +25,11 @@
 | File | Responsibility |
 | --- | --- |
 | `plugins/claude_sessions.sh` | Everything the SketchyBar item runs: read session files, derive states, emit and apply SketchyBar arguments. Sourceable so tests can call its functions. |
-| `plugins/claude_focus.sh` | Raise the Ghostty window whose title contains a given marker. Also lists window titles for diagnostics. |
-| `hooks/claude_bar_title.sh` | `SessionStart` hook that stamps the window title with the session marker. |
+| `plugins/claude_focus.sh` | Diagnostic: list Ghostty window titles, or raise the window whose title contains a given marker. |
 | `sketchybarrc.example` | The item declaration to merge into the user's own SketchyBar config. |
 | `test_states.sh` | Sources `claude_sessions.sh` and asserts state derivation, urgency ordering, and dry-run rendering against fixtures. |
 | `tests/fixtures/` | Session JSON fixtures used by `test_states.sh`. |
-| `README.md` | Install, wiring, and the Accessibility grant. |
+| `README.md` | Install, how it works, and why clicking a badge does nothing. |
 
 ---
 
@@ -721,223 +722,77 @@ EOF
 
 ---
 
-### Task 4: Stamp the window title
 
-Give every Claude session's window a title containing a marker derived from its session id, so Task 3's matcher has something reliable to find.
+### Task 4: Drop the click scaffolding and document the setup
 
-A hook runs as a child of `claude` and inherits its controlling terminal, so it can write the OSC 2 title sequence straight to `/dev/tty`. Claude Code also offers a `terminalSequence` field on hook output whose allowlist covers OSC 0/1/2, but writing to the tty needs no undocumented schema and is trivially verifiable, so that is what this uses.
+Click-to-focus is cancelled. Tasks 4 and 5 of the original plan — stamping the window title with a `SessionStart` hook, then wiring a `click_script` onto each badge — are replaced by this single task.
 
-The marker is `claude:` plus the first eight characters of the session id. The hook gets `session_id` in its own JSON input, so there is no cross-lookup into the session files and no startup race.
+**Why it was cancelled.** The original design assumed a title stamped at `SessionStart` would persist for the session's lifetime. It does not: Claude Code writes the Ghostty window title itself whenever it starts working, showing a spinner and a summary of the current task. Enumerating the live windows made this plain:
+
+```
+⠐ Ajouter indicateur menubar pour sessions Claude Code
+/V/s/arthur
+/V/s/a/karadoc
+⠂ Ajouter une palette de commande rapide à l'UI
+/V/s/exploratom
+```
+
+A marker written at session start survives only until the user's next prompt, so it would be gone from precisely the sessions that earn a badge. Writing it instead on the `Stop` and `Notification` hooks — after Claude Code's own title write rather than before it — would have worked, but the user chose to drop click-to-focus rather than carry a second hook and its ordering assumption.
+
+`plugins/claude_focus.sh` from Task 3 stays, as a diagnostic for inspecting Ghostty window titles. Two consequences follow, and this task cleans both up: its header comment currently justifies itself by pointing at a hook that will never exist, and `PLUGIN_DIR` in `plugins/claude_sessions.sh` was computed solely to build the `click_script` path, so it is now dead.
 
 **Files:**
-- Create: `hooks/claude_bar_title.sh`
-- Modify: `~/.claude/settings.json` (user config, not in this repo)
-
-**Interfaces:**
-- Consumes: `plugins/claude_focus.sh --list` from Task 3, for verification.
-- Produces: Ghostty window titles of the form `claude:<first 8 of sessionId> <project>`, for example `claude:128508e7 claude-bar`. Task 5 builds the same marker from the `sessionId` that `read_sessions` already emits.
-
-- [ ] **Step 1: Write the hook**
-
-Create `hooks/claude_bar_title.sh`:
-
-```bash
-#!/usr/bin/env bash
-# SessionStart hook: stamp the terminal window title with a marker claude-bar
-# can match on.
-#
-# Hooks run as a child of claude and inherit its controlling terminal, so the
-# OSC 2 sequence can go straight to /dev/tty. Claude Code also accepts a
-# `terminalSequence` field on hook output that permits OSC 0/1/2, but writing to
-# the tty depends on nothing undocumented and is easy to check by hand.
-#
-# fish rewrites the title on its next prompt, so the marker disappears on its own
-# when claude exits — stale titles are not a problem.
-set -uo pipefail
-
-input=$(cat)
-session_id=$(printf '%s' "$input" | jq -r '.session_id // empty')
-cwd=$(printf '%s' "$input" | jq -r '.cwd // empty')
-
-[[ -n "$session_id" ]] || exit 0
-
-printf '\033]2;claude:%s %s\007' "${session_id:0:8}" "$(basename "${cwd:-$PWD}")" \
-  > /dev/tty 2>/dev/null || true
-```
-
-Make it executable: `chmod +x hooks/claude_bar_title.sh`
-
-- [ ] **Step 2: Test the hook standalone**
-
-Run it directly with a synthetic payload, from a Ghostty window:
-
-```bash
-echo '{"session_id":"abcdef12-3456-7890-abcd-ef1234567890","cwd":"/Volumes/sourcecode/claude-bar"}' \
-  | ./hooks/claude_bar_title.sh
-```
-
-Expected: the Ghostty window title becomes `claude:abcdef12 claude-bar`. Confirm from another window:
-
-```bash
-./plugins/claude_focus.sh --list
-```
-
-Expected: `claude:abcdef12 claude-bar` appears in the list.
-
-If the title does not change, the tty write is being swallowed. Fall back to emitting the sequence as hook output instead — replace the final `printf` with:
-
-```bash
-jq -n --arg marker "claude:${session_id:0:8} $(basename "${cwd:-$PWD}")" '{
-  hookSpecificOutput: {
-    hookEventName: "SessionStart",
-    terminalSequence: ("\u001b]2;" + $marker + "\u0007")
-  }
-}'
-```
-
-- [ ] **Step 3: Wire it into settings**
-
-The user's `~/.claude/settings.json` already has a `SessionStart` array with four entries, matching `startup`, `resume`, `clear` and `compact`, each running `~/.claude/hooks/cbm-session-reminder`. Add this hook alongside the existing one in each of the four matchers — re-stamping after a compact or a clear is what keeps the title correct for the whole session.
-
-Symlink the hook so the repo stays the source of truth:
-
-```bash
-ln -sfn "$PWD/hooks/claude_bar_title.sh" ~/.claude/hooks/claude_bar_title.sh
-```
-
-Then in each of the four `SessionStart` matcher blocks, the `hooks` array becomes:
-
-```json
-"hooks": [
-  {
-    "type": "command",
-    "command": "~/.claude/hooks/cbm-session-reminder"
-  },
-  {
-    "type": "command",
-    "command": "~/.claude/hooks/claude_bar_title.sh"
-  }
-]
-```
-
-Validate the edit before relying on it: `jq empty ~/.claude/settings.json && echo "settings.json is valid"`
-
-- [ ] **Step 4: Verify end to end**
-
-Open a fresh Claude Code session in a new Ghostty window, then from another window:
-
-```bash
-./plugins/claude_focus.sh --list
-```
-
-Expected: a line of the form `claude:<8 hex chars> <project name>`, matching the new session.
-
-Cross-check the marker against what the session file reports, so Task 5 will build the same string:
-
-```bash
-jq -r '"claude:" + .sessionId[0:8] + " " + (.cwd | split("/") | last)' ~/.claude/sessions/*.json
-```
-
-Expected: the listed window titles are a subset of these lines.
-
-Then raise it: `./plugins/claude_focus.sh claude:<those 8 chars>`
-
-Expected: `raised`, and the correct window comes forward.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add hooks/claude_bar_title.sh
-git commit -F - <<'EOF'
-✨ Stamp Ghostty window titles with a session marker
-
-Title matching is the only way to reach a specific Ghostty window, so the titles
-have to be something we control. The default title is whatever fish last set,
-which is abbreviated and not reliably unique across sessions.
-
-A hook runs as a child of claude and inherits its controlling terminal, so it
-can write the OSC 2 sequence straight to /dev/tty. Claude Code also exposes a
-`terminalSequence` field on hook output whose allowlist covers OSC 0/1/2, and
-that is the documented route — but it depends on schema details that are not
-published, whereas the tty write can be checked in one command. The hook keeps
-the field as a documented fallback.
-
-The marker is `claude:` plus the first eight characters of the session id. The
-hook receives `session_id` in its own input, so there is no lookup into the
-session files and therefore no race against them being written at startup.
-
-Registered on all four SessionStart matchers, not just startup: re-stamping
-after a compact or a clear keeps the title correct for the whole session. Stale
-titles clean themselves up, since fish rewrites the title on its next prompt
-once claude exits.
-
-Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
-EOF
-```
-
----
-
-### Task 5: Wire the click and document the setup
-
-Connect the two halves: each badge gets a `click_script` that raises its window. Then write the README, since the project is only usable by someone who knows about the Accessibility grant.
-
-**Files:**
-- Modify: `plugins/claude_sessions.sh` (add `click_script` to the badge `--set`)
-- Modify: `test_states.sh` (assert the click_script)
+- Modify: `plugins/claude_sessions.sh` (remove the now-unused `PLUGIN_DIR`)
+- Modify: `plugins/claude_focus.sh` (correct the header comment)
 - Create: `README.md`
 
 **Interfaces:**
-- Consumes: `sid` from `read_sessions` (Task 2), the marker format from Task 4, `plugins/claude_focus.sh` from Task 3.
-- Produces: the finished plugin. No further tasks depend on it.
+- Consumes: everything from Tasks 1 through 3.
+- Produces: nothing further depends on this task.
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Remove the dead constant**
 
-In `test_states.sh`, in the rendering section, add after the `label=arthur` check:
+In `plugins/claude_sessions.sh`, delete the `PLUGIN_DIR` assignment near the top of the file. It was introduced to build a `click_script` path that is no longer wired. Confirm nothing else references it:
 
-```bash
-check "the badge raises its own window on click" \
-  "click_script=$PWD/plugins/claude_focus.sh claude:aaaaaaaa" \
-  "$(grep -m1 -F 'click_script=' <<<"$out")"
-```
+Run: `grep -n PLUGIN_DIR plugins/claude_sessions.sh`
+Expected: no output.
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [ ] **Step 2: Run the tests to verify nothing broke**
 
 Run: `./test_states.sh`
 
-Expected: FAIL — `expected: click_script=... / actual:` (empty), because no argument carries `click_script=` yet.
+Expected: PASS — all 26 checks, output pristine. `PLUGIN_DIR` had no readers, so removing it must not change behavior. If any check fails, the constant was load-bearing after all — stop and report rather than working around it.
 
-- [ ] **Step 3: Write the minimal implementation**
+- [ ] **Step 3: Correct the focus script's header comment**
 
-In `plugins/claude_sessions.sh`, inside `build_args`, extend the badge `--set` block with a final argument. It becomes:
+`plugins/claude_focus.sh` opens with a comment ending in a sentence to the effect of "which is why the SessionStart hook stamps a marker into the title in the first place." No such hook exists. Replace the comment block with:
 
 ```bash
-    printf '%s\n' --set "$item" \
-      "icon=$(state_icon "$state")" \
-      "icon.color=$(state_color "$state")" \
-      "label=$project" \
-      "label.color=$(state_color "$state")" \
-      "click_script=$PLUGIN_DIR/claude_focus.sh claude:${sid:0:8}"
+# Raise the Ghostty window whose title contains a marker, or list the titles.
+#
+# Ghostty is a single process for all its windows, so a session pid cannot be
+# resolved to a window through the process tree. Matching on the window title
+# via the Accessibility API is the only route.
+#
+# This is a diagnostic, not part of the menu bar indicator's normal operation.
+# Wiring it to a badge click was tried and dropped: it needs a stable, unique
+# marker in the window title, and Claude Code overwrites that title itself
+# whenever it starts working.
+#
+# Requires Accessibility permission for whichever process runs it.
 ```
 
-The marker must match what `hooks/claude_bar_title.sh` writes into the title: `claude:` plus the first eight characters of the session id.
+Leave the code below the comment untouched.
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [ ] **Step 4: Verify the script still runs**
 
-Run: `./test_states.sh`
+Run: `./plugins/claude_focus.sh --list`
 
-Expected: PASS — every check, including the new one.
+Expected: one line per open Ghostty window. A comment change cannot break it, but this confirms you did not disturb the heredoc.
 
-- [ ] **Step 5: Verify by clicking**
+Do not run the raise path — the user is working in those windows and stealing focus is disruptive.
 
-Reload SketchyBar so the new plugin output takes effect: `sketchybar --reload`
-
-Then get a real session into an attention state — start something long in another Ghostty window and let it finish, or trigger a permission prompt — and click its badge.
-
-Expected: the correct Ghostty window comes to the front.
-
-If nothing happens, check that Accessibility is granted to `/opt/homebrew/opt/sketchybar/bin/sketchybar` and not only to your terminal.
-
-- [ ] **Step 6: Write the README**
+- [ ] **Step 5: Write the README**
 
 Create `README.md`:
 
@@ -946,7 +801,7 @@ Create `README.md`:
 
 A SketchyBar indicator for Claude Code sessions running in several terminal
 windows at once. It answers, without switching apps, "does a session need me,
-and which one?" — and brings that window forward when you click it.
+and which one?"
 
 ```
 ── nothing to report ──        ── arthur is blocked ──
@@ -976,70 +831,17 @@ From your checkout of this repository:
 ```bash
 brew install FelixKratz/formulae/sketchybar
 
-mkdir -p ~/.config/sketchybar ~/.claude/hooks
+mkdir -p ~/.config/sketchybar
 ln -sfn "$PWD" ~/.config/sketchybar/claude-bar
-ln -sfn "$PWD/hooks/claude_bar_title.sh" ~/.claude/hooks/claude_bar_title.sh
 cat sketchybarrc.example >> ~/.config/sketchybar/sketchybarrc
 
 brew services start sketchybar
 ```
 
-Symlinking rather than copying keeps the checkout as the source of truth, so
-`git pull` is all an update takes.
-
 `jq` is required and ships with macOS at `/usr/bin/jq`.
 
-## Register the title hook
-
-Click-to-focus needs each Ghostty window to carry a marker in its title. Add the
-hook to every `SessionStart` matcher in `~/.claude/settings.json`:
-
-```json
-"SessionStart": [
-  {
-    "matcher": "startup",
-    "hooks": [{ "type": "command", "command": "~/.claude/hooks/claude_bar_title.sh" }]
-  },
-  {
-    "matcher": "resume",
-    "hooks": [{ "type": "command", "command": "~/.claude/hooks/claude_bar_title.sh" }]
-  },
-  {
-    "matcher": "clear",
-    "hooks": [{ "type": "command", "command": "~/.claude/hooks/claude_bar_title.sh" }]
-  },
-  {
-    "matcher": "compact",
-    "hooks": [{ "type": "command", "command": "~/.claude/hooks/claude_bar_title.sh" }]
-  }
-]
-```
-
-If you already have hooks on those matchers, append to the existing `hooks`
-arrays rather than replacing them. Check the result with
-`jq empty ~/.claude/settings.json`.
-
-## Grant Accessibility
-
-Raising a specific window goes through the macOS Accessibility API. In System
-Settings → Privacy & Security → Accessibility, add:
-
-- `/opt/homebrew/opt/sketchybar/bin/sketchybar` — for the badges to work.
-- Your terminal — for debugging with `plugins/claude_focus.sh --list`.
-
-Homebrew upgrades replace the SketchyBar binary and revoke the grant. If clicks
-stop working after an update, re-add it.
-
-## Limitations
-
-**Splits.** If two sessions share one Ghostty window as splits, the window title
-reflects only the focused split. Clicking raises the right window but not the
-right split. The Accessibility API exposes nothing below window level, so there
-is no workaround.
-
-**Same project twice.** The title marker is derived from the session id, so two
-sessions in the same directory are distinguished correctly — but their badges
-carry the same project label and are told apart only by position.
+Symlinking rather than copying keeps the checkout as the source of truth, so
+`git pull` is all an update takes.
 
 ## How it works
 
@@ -1048,6 +850,30 @@ carrying `status` (`busy`, `waiting`, `idle`), `statusUpdatedAt`, `cwd` and
 `sessionId`. The plugin reads those files directly every two seconds. Calling
 `claude agents --json` would return the same data but spawns the CLI at roughly
 200 ms per invocation, which is far too slow for this refresh rate.
+
+Session files outlive a crashed `claude`, so liveness comes from `kill -0` on the
+pid rather than from the file existing.
+
+## Clicking a badge does nothing
+
+This was tried and dropped. Ghostty runs one process for every window, so a
+session pid cannot be resolved to a window through the process tree — the only
+route is the macOS Accessibility API, which identifies windows solely by title.
+That needs a stable, unique marker in each title, and Claude Code writes the
+window title itself whenever it starts working, overwriting anything we put
+there. The badge tells you which project wants you; finding the window is
+manual.
+
+`plugins/claude_focus.sh` survives as a diagnostic:
+
+```bash
+./plugins/claude_focus.sh --list       # print every Ghostty window title
+./plugins/claude_focus.sh some-marker  # raise the first window whose title matches
+```
+
+Both need Accessibility permission for the process running them — add your
+terminal in System Settings → Privacy & Security → Accessibility. Homebrew
+upgrades replace binaries and revoke such grants, so this may need redoing.
 
 ## Development
 
@@ -1069,23 +895,34 @@ It reads the current item list on stdin, so feeding it `/dev/null` means "no
 badges on the bar yet".
 ````
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add plugins/claude_sessions.sh test_states.sh README.md
+git add plugins/claude_sessions.sh plugins/claude_focus.sh README.md
 git commit -F - <<'EOF'
-✨ Raise the matching window when a badge is clicked
+📝 Document the indicator and drop the click scaffolding
 
-Joins the two halves already built: badges now carry a click_script pointing at
-claude_focus.sh with the marker the SessionStart hook writes into the window
-title. The marker is built from the sessionId the session file already reports,
-so both sides derive it from the same source and cannot drift.
+Click-to-focus is cancelled, so the two constructs that existed only to serve it
+go with it: PLUGIN_DIR in the session plugin, computed solely to build a
+click_script path, and the claude_focus.sh header comment that justified the
+script by pointing at a SessionStart hook now never being written.
 
-The README documents the two pieces of setup that are not discoverable from the
-code: registering the title hook on all four SessionStart matchers, and granting
-Accessibility to the SketchyBar binary. It also records the split limitation,
-since someone will otherwise file it as a bug — a Ghostty window title reflects
-only the focused split, and the Accessibility API exposes nothing finer.
+The reason it was cancelled is worth recording, because the idea is tempting
+enough that someone will try it again. Ghostty runs one process for every
+window, so a session pid cannot be resolved to a window through the process
+tree, and the Accessibility API identifies windows only by title. The plan was
+to stamp a unique marker into the title at SessionStart — but Claude Code writes
+that title itself whenever it starts working, so the marker would be gone from
+exactly the sessions that earn a badge. Writing it on the Stop and Notification
+hooks instead would have worked, at the cost of a second hook and an ordering
+assumption against Claude Code's own title writes. Not worth it for the payoff.
+
+claude_focus.sh stays as a diagnostic for inspecting window titles, with its
+comment corrected to say so.
+
+The README leads with what the indicator does and states plainly that clicking a
+badge does nothing, since a menu bar item that looks clickable and isn't will
+otherwise be read as broken.
 
 Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
 EOF
