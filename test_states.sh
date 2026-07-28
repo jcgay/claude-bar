@@ -204,6 +204,47 @@ check "with jq missing the dropdown says why" \
   "jq not found in PATH | color=#fb4934" \
   "$(printf '%s\n' "$no_jq_out" | sed -n '/^---$/,$p' | tail -n +2)"
 
+# --- alfred feed -----------------------------------------------------------
+# claude_alfred.sh reuses the plugin's state functions wholesale, so the only
+# new logic is the ranking and the JSON assembly. Everything below pins one of
+# those two.
+#
+# Not covered: the "jq not found" item. Unlike the plugin, that script pins its
+# own PATH, and macOS ships /usr/bin/jq — so there is no PATH this suite can
+# hand it that reaches the guard.
+
+alfred_out=$(CLAUDE_SESSIONS_DIR="$fixture_dir" ./plugins/claude_alfred.sh)
+
+check "the feed is valid JSON" \
+  "ok" "$(printf '%s\n' "$alfred_out" | jq -e . >/dev/null 2>&1 && echo ok)"
+
+# The fixtures pin the ordering end to end: arthur is waiting, so it outranks
+# both busy sessions whatever their age, and pipe|farm's stale timestamp puts it
+# above deltatom's fresh one — within a rank, the longest wait comes first.
+check "the feed is ordered by urgency, then by longest wait" \
+  "● arthur ◐ pipe|farm ◐ deltatom · exploratom" \
+  "$(printf '%s\n' "$alfred_out" | jq -r '[.items[].title] | join(" ")')"
+
+check "every item carries its pid as the focus argument" \
+  "$$ $$ $$ $$" "$(printf '%s\n' "$alfred_out" | jq -r '[.items[].arg] | join(" ")')"
+
+check "the subtitle carries state, age and pid" \
+  "1" "$(printf '%s\n' "$alfred_out" | jq -r '.items[0].subtitle' | grep -cE "^needs input · [0-9]+[smh] · pid $$\$")"
+
+# The dropdown has to rewrite `|`, which is SwiftBar's parameter separator. JSON
+# has no such rule, and jq quotes what needs quoting — so a project name that
+# the menu bar mangles on purpose must arrive here intact.
+check "a pipe in the project name survives the feed unescaped" \
+  "1" "$(printf '%s\n' "$alfred_out" | jq -r '[.items[].title] | join(" ")' | grep -cF 'pipe|farm')"
+
+alfred_empty=$(CLAUDE_SESSIONS_DIR="$empty_dir" ./plugins/claude_alfred.sh)
+
+# valid=false so Enter on the placeholder does nothing rather than handing an
+# empty arg to the focus script.
+check "with no sessions the feed says so, unactionably" \
+  "No Claude Code sessions false" \
+  "$(printf '%s\n' "$alfred_empty" | jq -r '.items[0] | "\(.title) \(.valid)"')"
+
 if (( failures )); then
   printf '\n%d failure(s)\n' "$failures"
   exit 1

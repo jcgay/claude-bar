@@ -101,6 +101,40 @@ towards Ghostty on the first click; Accessibility is no longer involved.
 ./plugins/claude_focus.sh 79209    # focus the split running that pid
 ```
 
+## Switch from the keyboard
+
+The dropdown focuses the right split, but only via the mouse. `plugins/claude_alfred.sh`
+prints the same list as an Alfred Script Filter feed, so a hotkey brings it up,
+typing narrows it and Enter lands the cursor in the session:
+
+```
+◐ claude-bar
+  working · 2m · pid 41207
+```
+
+Most urgent first — a session blocked on a prompt is already selected before you
+type anything, and within one state the longest wait comes first.
+
+Three boxes in a new Alfred workflow, connected left to right:
+
+1. **Hotkey** — whichever one you like.
+2. **Script Filter** — Language `/bin/bash`, script
+   `"$PWD/plugins/claude_alfred.sh"` with the checkout's real path. Leave *with
+   input as {query}* off: the filtering is Alfred's, over the item titles.
+3. **Run Script** — Language `/bin/bash`, script
+   `"$PWD/plugins/claude_focus.sh" "$1"`, again with the real path.
+
+Alfred reads the scripts where they sit, so `git pull` is the whole update path
+here too. macOS asks Alfred for Automation permission towards Ghostty the first
+time you select a session, as it did for SwiftBar.
+
+Requires the Alfred Powerpack, which is what Script Filters need. Run it by hand
+to see what Alfred will see:
+
+```bash
+./plugins/claude_alfred.sh
+```
+
 ## Development
 
 ```bash
@@ -108,6 +142,7 @@ towards Ghostty on the first click; Accessibility is no longer involved.
 ```
 
 Covers state derivation, urgency ordering, colors, icons, age formatting, and the
-rendered output against fixtures in `tests/fixtures/`. The fixtures carry a pid
-placeholder that the test rewrites to its own pid, so the dead-process filter and
-the malformed-timestamp guard are exercised for real.
+rendered output — both the SwiftBar dropdown and the Alfred feed — against
+fixtures in `tests/fixtures/`. The fixtures carry a pid placeholder that the test
+rewrites to its own pid, so the dead-process filter and the malformed-timestamp
+guard are exercised for real.

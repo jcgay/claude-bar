@@ -41,6 +41,16 @@ closing `⟧` of the marker is multibyte and bash otherwise reads its leading by
 name. Neither is covered by `test_states.sh`, which stops at the rendered `bash=` parameters —
 exercise the script itself against a live pid.
 
+## plugins/claude_alfred.sh
+
+The same list as an Alfred Script Filter feed, for switching by hotkey. It holds no state
+logic of its own: it sources `claude_sessions.sh` — which is only possible because of that
+same `BASH_SOURCE`/`$0` guard — and adds a rank, a `sort`, and a `jq` that builds the JSON.
+Two things it deliberately does differently from the plugin: it pins `PATH` (it has no jq
+warning to keep reachable, and Alfred's PATH is a GUI app's too), and it leaves `|` alone,
+since that is SwiftBar's parameter separator and means nothing to JSON. Items carry no `uid`,
+or Alfred would re-sort them by past usage and undo the ranking.
+
 ## Tests
 
 Fixtures carry `PID_PLACEHOLDER` and `TIMESTAMP_PLACEHOLDER`, which `test_states.sh` substitutes
