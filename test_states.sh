@@ -57,8 +57,8 @@ check "no states at all collapses to dormant" \
   dormant "$(printf '' | most_urgent)"
 
 check "needs_input is red" "#fb4934" "$(state_color needs_input)"
-check "just_finished is yellow" "#fabd2f" "$(state_color just_finished)"
-check "working is blue" "#83a598" "$(state_color working)"
+check "just_finished is yellow" "#b57614" "$(state_color just_finished)"
+check "working is blue" "#458588" "$(state_color working)"
 check "dormant is grey" "#7c6f64" "$(state_color dormant)"
 
 check "needs_input shows a filled dot" "●" "$(state_icon needs_input)"
@@ -114,7 +114,7 @@ check "the title does not badge the dormant session" \
 # flakes (measured ~13%). Asserting the pattern instead pins icon, project,
 # label, unit and color without depending on which second it lands in.
 check "the dropdown lists the busy session" \
-  "1" "$(printf '%s\n' "$menu" | grep -cE '^◐ deltatom — working [0-9]+s \| color=#83a598$')"
+  "1" "$(printf '%s\n' "$menu" | grep -cE '^◐ deltatom — working [0-9]+s \| color=#458588$')"
 
 check "the dropdown lists the dormant session" \
   "1" "$(printf '%s\n' "$menu" | grep -cF '· exploratom — idle')"

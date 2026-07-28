@@ -40,12 +40,23 @@ derive_state() {
   esac
 }
 
-# Gruvbox, matching the user's Ghostty palette.
+# Gruvbox, but the neutral and faded variants rather than the bright ones the
+# Ghostty palette uses. These have to stay legible on two surfaces at once: the
+# menu bar, which macOS tints from the wallpaper, and the dropdown, which
+# follows the system appearance. SwiftBar's `light,dark` colour pair keys on the
+# appearance alone, so it cannot help when the two surfaces disagree — a single
+# colour with decent contrast both ways is the more correct answer here.
+#
+# Worst-case WCAG contrast against white and against a dark bar:
+#   #fb4934 red 3.44 — kept, the bright variant already holds up
+#   #b57614 yellow 3.75 — replaces #fabd2f, which scored 1.70 on white
+#   #458588 blue 3.35 — replaces #83a598, which scored 2.69 and read as grey
+#   #7c6f64 grey 2.91 — kept deliberately; dormant rows are meant to recede
 state_color() {
   case "$1" in
     needs_input)   printf '#fb4934\n' ;;
-    just_finished) printf '#fabd2f\n' ;;
-    working)       printf '#83a598\n' ;;
+    just_finished) printf '#b57614\n' ;;
+    working)       printf '#458588\n' ;;
     *)             printf '#7c6f64\n' ;;
   esac
 }
