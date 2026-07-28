@@ -115,25 +115,92 @@ typing narrows it and Enter lands the cursor in the session:
 Most urgent first — a session blocked on a prompt is already selected before you
 type anything, and within one state the longest wait comes first.
 
-Three boxes in a new Alfred workflow, connected left to right:
+Requires the Alfred Powerpack, which is what Script Filters need.
 
-1. **Hotkey** — whichever one you like.
-2. **Script Filter** — Language `/bin/bash`, script
-   `"$PWD/plugins/claude_alfred.sh"` with the checkout's real path. Leave *with
-   input as {query}* off: the filtering is Alfred's, over the item titles.
-3. **Run Script** — Language `/bin/bash`, script
-   `"$PWD/plugins/claude_focus.sh" "$1"`, again with the real path.
+### Building the workflow
 
-Alfred reads the scripts where they sit, so `git pull` is the whole update path
-here too. macOS asks Alfred for Automation permission towards Ghostty the first
-time you select a session, as it did for SwiftBar.
+Three objects, wired left to right: a **Hotkey** and a **Script Filter** both
+feeding the list, and a **Run Script** doing the focusing.
 
-Requires the Alfred Powerpack, which is what Script Filters need. Run it by hand
-to see what Alfred will see:
+```
+ Hotkey ─┐
+         ├─▶ Script Filter (claude_alfred.sh) ─▶ Run Script (claude_focus.sh)
+ "cc" ───┘
+```
+
+Both scripts are referenced by absolute path, so Alfred reads them where they
+sit in the checkout and `git pull` is the whole update path. Substitute your own
+path for `~/src/claude-bar` below — `~` expands, because these fields are bash
+scripts.
+
+**1. Create the workflow.** Alfred Preferences → *Workflows* → the `+` at the
+bottom of the sidebar → *Blank Workflow*. A name and a bundle id are enough.
+
+**2. Add the Script Filter.** Right-click the canvas → *Inputs* → *Script
+Filter*, then, in the *Basic* tab:
+
+| Field | Value |
+| --- | --- |
+| Keyword | `cc`, with *Argument Optional* and *with space* ticked |
+| Placeholder Title | `Claude sessions` |
+| Language | `/bin/bash` |
+| Script | `~/src/claude-bar/plugins/claude_alfred.sh` |
+| Alfred filters results | ticked, *Word Matching* |
+
+*Alfred filters results* is the one that matters. With it on, the script runs
+once per invocation and Alfred narrows its output as you type; with it off,
+Alfred re-runs the script on every keystroke and expects it to do its own
+filtering. The feed is a snapshot of live processes — re-reading it mid-word
+would let rows shuffle under the selection.
+
+*with input as {query}* versus *argv* makes no difference here: the script
+ignores its input either way, since the query is Alfred's to apply.
+
+**3. Add the Run Script.** Right-click → *Actions* → *Run Script*:
+
+| Field | Value |
+| --- | --- |
+| Language | `/bin/bash` |
+| Input | *with input as argv* |
+| Script | `~/src/claude-bar/plugins/claude_focus.sh "$1"` |
+
+`$1` is the `arg` of the selected item, which is the session's pid — the only
+thing tying a row back to a Ghostty split.
+
+**4. Add the Hotkey.** Right-click → *Triggers* → *Hotkey*. Record the key
+combination and leave *Action* and *Argument* at their defaults (*Pass through
+to Workflow*, *None*); the Script Filter downstream is what turns the keypress
+into a list.
+
+**5. Connect them.** Drag from the nub on the right edge of the Hotkey to the
+left edge of the Script Filter, then from the Script Filter to the Run Script.
+The keyword and the hotkey are two doors into the same list — keep both, or drop
+whichever you don't reach for.
+
+### Permissions
+
+The first time you select a session, macOS asks Alfred for Automation permission
+towards Ghostty, exactly as it did for SwiftBar. Focus silently does nothing if
+that prompt was dismissed; re-arm it with:
+
+```bash
+tccutil reset AppleEvents com.runningwithcrayons.Alfred
+```
+
+### When it shows nothing
+
+Run the feed by hand — it prints the JSON Alfred parses:
 
 ```bash
 ./plugins/claude_alfred.sh
 ```
+
+If that looks right but Alfred's list does not, open the workflow's debugger
+(the bug icon, top right of the canvas) and press the hotkey: it shows the
+script's stdout and stderr. A feed reading `jq not found in PATH` means jq is
+neither in `/usr/bin` nor in either Homebrew prefix — the script pins its own
+`PATH`, because Alfred runs workflow scripts with a GUI app's environment rather
+than your shell's.
 
 ## Development
 
