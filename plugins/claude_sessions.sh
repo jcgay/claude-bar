@@ -16,6 +16,17 @@ set -uo pipefail
 
 SESSIONS_DIR="${CLAUDE_SESSIONS_DIR:-$HOME/.claude/sessions}"
 
+# Clicking a dropdown row focuses that session's Ghostty split. SwiftBar runs
+# this plugin through a symlink in its own plugin folder, so the sibling script
+# has to be found relative to the real file rather than the link.
+#
+# readlink by absolute path, and `%/*` rather than dirname: SwiftBar's PATH is
+# the same one that makes the jq guard below necessary, and neither is in /bin.
+# A focus path silently truncated to /claude_focus.sh would leave clicks doing
+# nothing at all, with no visible symptom.
+FOCUS_SCRIPT="$(/usr/bin/readlink -f "${BASH_SOURCE[0]}")"
+FOCUS_SCRIPT="${FOCUS_SCRIPT%/*}/claude_focus.sh"
+
 # A session that went idle longer ago than this is forgotten rather than
 # freshly finished, and no longer earns a badge.
 JUST_FINISHED_WINDOW_MS=300000
@@ -177,7 +188,9 @@ render() {
     state=$(derive_state "$status" "$updated" "$now")
     states+=("$state")
 
-    rows+=("$(state_icon "$state") $project — $(state_label "$state") $(format_age "$(( now - updated ))") | color=$(state_color "$state")")
+    # terminal=false keeps the focus script in the background: opening Terminal
+    # to run it would steal the focus we are trying to hand to Ghostty.
+    rows+=("$(state_icon "$state") $project — $(state_label "$state") $(format_age "$(( now - updated ))") | color=$(state_color "$state") bash=\"$FOCUS_SCRIPT\" param1=$pid terminal=false")
 
     case "$state" in
       needs_input|just_finished) badges+="  $(state_icon "$state") $project" ;;

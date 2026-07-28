@@ -71,25 +71,35 @@ the menu bar will show by running it:
 ./plugins/claude_sessions.sh
 ```
 
-## Clicking does nothing
+## Click to focus
 
-This was tried and dropped. Ghostty is a single process for all its windows, so a
-session pid cannot be resolved to a window through the process tree — the only
-route is the macOS Accessibility API, which identifies windows solely by title.
-That needs a stable, unique marker in each title, and Claude Code writes the
-window title itself whenever it starts working, overwriting anything we put
-there. The dropdown tells you which project wants you; finding the window is
-manual.
+Clicking a row brings that session's Ghostty split to the front with the cursor
+in it, even when it is neither the frontmost window nor the focused split within
+its own window.
 
-`plugins/claude_focus.sh` survives as a diagnostic:
+This was tried once before and dropped. Ghostty is a single process for all its
+windows, so a session pid cannot be resolved to a window through the process
+tree, and the Accessibility API — the only route then available — sees windows
+alone, identified by title. Claude Code rewrites that title whenever it starts
+working, so no marker survived long enough to match on.
+
+Ghostty 1.3 ships an AppleScript dictionary, which undoes both halves of that. A
+`terminal` there is a *split* rather than a window, and `focus` raises its window
+and moves the cursor into it. Tying a pid to one is done by writing OSC 2 to the
+session's own tty: a title set that way lands on that surface alone, whatever has
+focus. Claude Code still overwrites it, but the marker now only has to outlive
+the single AppleScript call that reads it, and the previous title is written back
+immediately after.
+
+Needs Ghostty 1.3 or later. macOS asks for Automation permission for SwiftBar
+towards Ghostty on the first click; Accessibility is no longer involved.
+
+`plugins/claude_focus.sh` also runs by hand:
 
 ```bash
-./plugins/claude_focus.sh --list       # print every Ghostty window title
-./plugins/claude_focus.sh some-marker  # raise the first window whose title matches
+./plugins/claude_focus.sh --list   # id, working directory and title of every split
+./plugins/claude_focus.sh 79209    # focus the split running that pid
 ```
-
-Both need Accessibility permission for the process running them — add your
-terminal in System Settings → Privacy & Security → Accessibility.
 
 ## Development
 

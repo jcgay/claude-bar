@@ -202,3 +202,74 @@ remains a diagnostic.
 along with the rest of the SketchyBar item-reconciliation layer, and
 `hooks/settings-snippet.json` was never written — SwiftBar needs no
 `SessionStart` hook. Neither exists in this repository.
+
+---
+
+## Revision: click-to-focus, through Ghostty's AppleScript dictionary
+
+**Date:** 2026-07-28
+
+Click-to-focus was cancelled twice above, on a blocker that no longer holds. It
+ships. Everything else in this document stands.
+
+**Why it was blocked.** Window resolution had to go through the Accessibility
+API, which exposes windows only, identified by title — so it needed a stable,
+unique marker in each window title, and Claude Code overwrites that title
+whenever it starts working. The Splits risk noted under *Click to focus* made it
+worse still: the user runs one window per project holding two splits, the Claude
+session and a plain shell that is usually `cd`-ed into a subdirectory. The
+Accessibility window title reflects only the focused split, so even a surviving
+marker on the Claude split would not have been visible when the shell had focus.
+Both were verified again before being discarded: writing OSC 2 to an unfocused
+split leaves the window title showing the *other* split's.
+
+**What changed.** Ghostty 1.3 ships an AppleScript dictionary
+(`Ghostty.app/Contents/Resources/Ghostty.sdef`, `NSAppleScriptEnabled`). Its
+`terminal` class is an individual *surface* — one split — carrying `id`, `name`
+and `working directory`, and its `focus` command raises the surface's window and
+moves the cursor into that surface. A split that is neither in the frontmost
+window nor focused within its own window comes forward correctly; verified.
+
+The Accessibility API is no longer used, and neither is the process tree.
+
+**Tying a pid to a surface.** The dictionary offers no pid and no tty, and the
+session file knows no surface id, so the link is made rather than looked up:
+
+1. `ps -o tty= -p <pid>` gives the session's tty.
+2. `printf '\033]2;⟦claude-bar:<pid>⟧\007' > /dev/<tty>` titles that surface.
+   Unlike a window title, a *surface* title updates regardless of focus.
+3. `focus (first terminal whose name is <marker>)`.
+4. The surface's previous title, read before step 2, is written back.
+
+Claude Code still overwrites titles — a busy session animates a spinner in
+its own — but the marker now only has to outlive step 3. Measured: it survives
+well past 500 ms on a busy session.
+
+Step 4 was a deliberate choice over two cheaper alternatives. Matching on
+`working directory` instead of a marker needs no title write at all, but picks
+the wrong split whenever both sit at the project root. Leaving a human-readable
+marker in place skips the restore, at the cost of the conversation summary
+Claude Code puts there. Restoring keeps the click free of visible traces.
+
+**Rendering.** Every dropdown row gains
+`bash="<dir>/claude_focus.sh" param1=<pid> terminal=false`. `terminal=false`
+matters: launching Terminal to run the script would steal the focus being handed
+to Ghostty.
+
+**PATH.** SwiftBar launches plugins with a GUI app's PATH — the reason the `jq`
+warning exists. The focus path is the worst place for that exposure, since
+`readlink` and `dirname` are absent from `/bin` and a truncated path leaves every
+click doing nothing with no visible symptom. The plugin therefore calls
+`/usr/bin/readlink` by absolute path and uses `%/*` rather than `dirname`; it
+cannot simply pin `PATH`, which would make its own `jq` warning unreachable.
+`claude_focus.sh` has no such guard and pins `PATH=/usr/bin:/bin`.
+
+**Limits.** Ghostty 1.3+ only, and Ghostty only: the marker is written before we
+know whether a Ghostty surface will claim it, so aiming this at a session in
+another terminal leaves that terminal's title overwritten. Automation permission
+for SwiftBar towards Ghostty is requested by macOS on the first click.
+
+**Testing.** `test_states.sh` covers the rendered parameters — that every row is
+clickable, that the pid is passed, that the path survives both a symlinked
+install and a PATH without `readlink`. The AppleScript half is not unit-testable
+and stays out of the suite, as `claude_focus.sh` always has.

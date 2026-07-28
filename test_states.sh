@@ -114,7 +114,7 @@ check "the title does not badge the dormant session" \
 # flakes (measured ~13%). Asserting the pattern instead pins icon, project,
 # label, unit and color without depending on which second it lands in.
 check "the dropdown lists the busy session" \
-  "1" "$(printf '%s\n' "$menu" | grep -cE '^◐ deltatom — working [0-9]+s \| color=#458588$')"
+  "1" "$(printf '%s\n' "$menu" | grep -cE '^◐ deltatom — working [0-9]+s \| color=#458588 bash=')"
 
 check "the dropdown lists the dormant session" \
   "1" "$(printf '%s\n' "$menu" | grep -cF '· exploratom — idle')"
@@ -133,6 +133,37 @@ check "a pipe in the project name is escaped in the dropdown" \
 
 check "a raw pipe in the project name never reaches the output" \
   "" "$(printf '%s\n' "$out" | grep -F 'pipe|farm')"
+
+# Every live row hands its own pid to the focus script — the pid is the only
+# thing tying a row back to a Ghostty split. All fixtures share this test's pid,
+# so this pins the parameter's presence and shape, not per-row values.
+check "every dropdown row is clickable" \
+  "$(printf '%s\n' "$menu" | grep -c .)" \
+  "$(printf '%s\n' "$menu" | grep -cF "bash=\"$PWD/plugins/claude_focus.sh\" param1=$$ terminal=false")"
+
+# SwiftBar installs the plugin as a symlink in its own folder, so a focus path
+# built from $0 rather than the resolved BASH_SOURCE would point at that folder,
+# where no focus script exists. Only running through a link catches that.
+link_dir=$(mktemp -d)
+ln -s "$PWD/plugins/claude_sessions.sh" "$link_dir/claude-bar.2s.sh"
+link_out=$(CLAUDE_SESSIONS_DIR="$fixture_dir" "$link_dir/claude-bar.2s.sh")
+rm -rf "$link_dir"
+
+check "run through a symlink the rows still point at the real focus script" \
+  "4" "$(printf '%s\n' "$link_out" | grep -cF "bash=\"$PWD/plugins/claude_focus.sh\"")"
+
+# The jq guard further down exists because SwiftBar launches plugins with its
+# own PATH. Everything else the plugin shells out to has the same exposure, and
+# a focus path is the worst place for it: readlink off PATH truncates it to
+# /claude_focus.sh and every click does nothing, with nothing on screen to say
+# so. This PATH carries jq and nothing else the plugin reaches for.
+bare_dir=$(mktemp -d)
+ln -s /usr/bin/jq "$bare_dir/jq"
+bare_out=$(PATH="$bare_dir:/bin" CLAUDE_SESSIONS_DIR="$fixture_dir" "$PWD/plugins/claude_sessions.sh")
+rm -rf "$bare_dir"
+
+check "a PATH without readlink still resolves the focus script" \
+  "4" "$(printf '%s\n' "$bare_out" | grep -cF "bash=\"$PWD/plugins/claude_focus.sh\"")"
 
 # Regression for Finding 1: a jq *parse* error aborts that jq process
 # immediately, so a single batched `jq ... file1 file2 ...` call loses every

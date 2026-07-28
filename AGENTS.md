@@ -22,12 +22,24 @@ anything folded into `render` stops being reachable that way. The `CLAUDE_SESSIO
 Read it end to end first. Nearly every surprising line carries a comment saying why, and most are
 pinned by a test: one `jq` per file rather than one batched call, `kill -0` for liveness, `|`
 rewritten to `∣`, the `statusUpdatedAt` regex guard, the visible warning when `jq` is absent from
-SwiftBar's PATH, no `set -e`, single colour values rather than SwiftBar `light,dark` pairs. What
-looks like an accident in there is usually one of those. Recolouring means re-checking WCAG
-contrast against both a white and a dark menu bar — the figures live above `state_color`.
+SwiftBar's PATH, no `set -e`, single colour values rather than SwiftBar `light,dark` pairs,
+`/usr/bin/readlink` by absolute path with `%/*` in place of `dirname`. What looks like an accident
+in there is usually one of those. Recolouring means re-checking WCAG contrast against both a white
+and a dark menu bar — the figures live above `state_color`.
 
-`plugins/claude_focus.sh` is a diagnostic, not part of the indicator: click-to-focus was tried and
-dropped, for reasons the README records.
+SwiftBar's PATH is the recurring trap: it is a GUI app's, not a login shell's, and `/bin` alone has
+neither `readlink` nor `dirname` nor `jq`. The plugin cannot simply pin `PATH`, because that would
+render its own `jq` warning unreachable — hence the absolute path. `claude_focus.sh` has no such
+guard and does pin it.
+
+## plugins/claude_focus.sh
+
+Click-to-focus, reached from every dropdown row. Two lines carry more weight than they look:
+`character id 9` is bound outside the `tell` block because Ghostty's dictionary declares a class
+named `tab` that shadows AppleScript's constant inside it, and `${pid}` is braced because the
+closing `⟧` of the marker is multibyte and bash otherwise reads its leading bytes as part of the
+name. Neither is covered by `test_states.sh`, which stops at the rendered `bash=` parameters —
+exercise the script itself against a live pid.
 
 ## Tests
 
