@@ -36,10 +36,13 @@ row you have already dealt with keeps its yellow for the rest of the window.
 Rows are labelled by the session's working directory, which stops being enough
 the moment two of them are worktrees of the same repo, or one is a long detour
 you will want to recognise in an hour. Claude Code already keeps a display name
-per session, so the label is `-n`:
+per session, and the label is that name. Set it at launch, or once you know
+what the session turned into:
 
-```bash
-claude -n "bisect the flaky suite"
+```
+claude -n "bisect the flaky suite"   # a shell, at launch
+/rename bisect the flaky suite       # the session itself, aliased to /name
+/rename                              # no argument: Claude names it for you
 ```
 
 ```
@@ -47,10 +50,13 @@ claude -n "bisect the flaky suite"
  ◐ deltatom                working 1m
 ```
 
-The name Claude Code derives for a session by itself — `deltatom-8e` — is
-ignored on purpose. It is the directory with a hash stapled on, which the row
-already said. Only a name with an origin behind it displaces the directory:
-`-n`, a hook, or another session.
+A rename lands in the session file in place, so the row follows it within one
+refresh — there is nothing to restart.
+
+The name Claude Code derives for a session by itself, `deltatom-8e`, is ignored
+on purpose. It is the directory with a hash stapled on, which the row already
+said. Every other origin displaces the directory: your own name, the one
+`/rename` generates, a hook, or another session.
 
 ## Install
 
