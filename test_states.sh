@@ -92,8 +92,8 @@ out=$(CLAUDE_SESSIONS_DIR="$fixture_dir" ./plugins/claude_sessions.sh)
 title=$(printf '%s\n' "$out" | sed -n '1p')
 menu=$(printf '%s\n' "$out" | sed -n '/^---$/,$p' | tail -n +2)
 
-check "the title counts the four well-formed live sessions" \
-  "1" "$(printf '%s' "$title" | grep -c '✦ 4')"
+check "the title counts the five well-formed live sessions" \
+  "1" "$(printf '%s' "$title" | grep -c '✦ 5')"
 
 check "the title badges the waiting session" \
   "arthur" "$(printf '%s' "$title" | sed -n 's/.*● \([a-z]*\).*/\1/p')"
@@ -121,6 +121,16 @@ check "the dropdown lists the dormant session" \
 
 check "the dropdown lists the waiting session" \
   "1" "$(printf '%s\n' "$menu" | grep -cF '● arthur — needs input')"
+
+# The two halves of the label. Claude Code derives a name for every session
+# whether or not one was asked for, so displaying it unconditionally would put
+# `deltatom-8e` in the menu bar and call that an improvement — only a name the
+# user chose is allowed to displace the directory.
+check "a name the user set replaces the directory" \
+  "1" "$(printf '%s\n' "$menu" | grep -cF '· bisect the flaky suite — idle')"
+
+check "a name Claude Code derived never reaches the output" \
+  "" "$(printf '%s\n' "$out" | grep -o 'deltatom-8e')"
 
 check "the dead session appears nowhere" \
   "" "$(printf '%s\n' "$out" | grep -o 'ghost')"
@@ -150,7 +160,7 @@ link_out=$(CLAUDE_SESSIONS_DIR="$fixture_dir" "$link_dir/claude-bar.2s.sh")
 rm -rf "$link_dir"
 
 check "run through a symlink the rows still point at the real focus script" \
-  "4" "$(printf '%s\n' "$link_out" | grep -cF "bash=\"$PWD/plugins/claude_focus.sh\"")"
+  "5" "$(printf '%s\n' "$link_out" | grep -cF "bash=\"$PWD/plugins/claude_focus.sh\"")"
 
 # The jq guard further down exists because SwiftBar launches plugins with its
 # own PATH. Everything else the plugin shells out to has the same exposure, and
@@ -163,7 +173,7 @@ bare_out=$(PATH="$bare_dir:/bin" CLAUDE_SESSIONS_DIR="$fixture_dir" "$PWD/plugin
 rm -rf "$bare_dir"
 
 check "a PATH without readlink still resolves the focus script" \
-  "4" "$(printf '%s\n' "$bare_out" | grep -cF "bash=\"$PWD/plugins/claude_focus.sh\"")"
+  "5" "$(printf '%s\n' "$bare_out" | grep -cF "bash=\"$PWD/plugins/claude_focus.sh\"")"
 
 # Regression for Finding 1: a jq *parse* error aborts that jq process
 # immediately, so a single batched `jq ... file1 file2 ...` call loses every
@@ -222,11 +232,11 @@ check "the feed is valid JSON" \
 # both busy sessions whatever their age, and pipe|farm's stale timestamp puts it
 # above deltatom's fresh one — within a rank, the longest wait comes first.
 check "the feed is ordered by urgency, then by longest wait" \
-  "● arthur ◐ pipe|farm ◐ deltatom · exploratom" \
+  "● arthur ◐ pipe|farm ◐ deltatom · exploratom · bisect the flaky suite" \
   "$(printf '%s\n' "$alfred_out" | jq -r '[.items[].title] | join(" ")')"
 
 check "every item carries its pid as the focus argument" \
-  "$$ $$ $$ $$" "$(printf '%s\n' "$alfred_out" | jq -r '[.items[].arg] | join(" ")')"
+  "$$ $$ $$ $$ $$" "$(printf '%s\n' "$alfred_out" | jq -r '[.items[].arg] | join(" ")')"
 
 check "the subtitle carries state, age and pid" \
   "1" "$(printf '%s\n' "$alfred_out" | jq -r '.items[0].subtitle' | grep -cE "^needs input · [0-9]+[smh] · pid $$\$")"

@@ -31,6 +31,27 @@ so the menu bar stays quiet.
 when a session last changed state but not whether you have read the result, so a
 row you have already dealt with keeps its yellow for the rest of the window.
 
+## Naming a session
+
+Rows are labelled by the session's working directory, which stops being enough
+the moment two of them are worktrees of the same repo, or one is a long detour
+you will want to recognise in an hour. Claude Code already keeps a display name
+per session, so the label is `-n`:
+
+```bash
+claude -n "bisect the flaky suite"
+```
+
+```
+ ● bisect the flaky suite  needs input 8s
+ ◐ deltatom                working 1m
+```
+
+The name Claude Code derives for a session by itself — `deltatom-8e` — is
+ignored on purpose. It is the directory with a hash stapled on, which the row
+already said. Only a name with an origin behind it displaces the directory:
+`-n`, a hook, or another session.
+
 ## Install
 
 ```bash
@@ -54,8 +75,9 @@ checkout as the source of truth, so `git pull` is all an update takes.
 ## How it works
 
 Claude Code writes one JSON file per live session to `~/.claude/sessions/<pid>.json`,
-carrying `status` (`busy`, `waiting`, `idle`), `statusUpdatedAt`, `cwd` and
-`sessionId`. The plugin reads those files directly. Calling `claude agents --json`
+carrying `status` (`busy`, `waiting`, `idle`), `statusUpdatedAt`, `cwd`,
+`sessionId` and the session's `name` alongside the `nameSource` that says where
+that name came from. The plugin reads those files directly. Calling `claude agents --json`
 would return the same data but spawns the CLI at roughly 200 ms per invocation,
 far too slow at this refresh rate.
 

@@ -21,11 +21,12 @@ anything folded into `render` stops being reachable that way. The `CLAUDE_SESSIO
 
 Read it end to end first. Nearly every surprising line carries a comment saying why, and most are
 pinned by a test: one `jq` per file rather than one batched call, `kill -0` for liveness, `|`
-rewritten to `∣`, the `statusUpdatedAt` regex guard, the visible warning when `jq` is absent from
-SwiftBar's PATH, no `set -e`, single colour values rather than SwiftBar `light,dark` pairs,
-`/usr/bin/readlink` by absolute path with `%/*` in place of `dirname`. What looks like an accident
-in there is usually one of those. Recolouring means re-checking WCAG contrast against both a white
-and a dark menu bar — the figures live above `state_color`.
+rewritten to `∣`, the `statusUpdatedAt` regex guard, the `nameSource` blacklist rather than a
+whitelist, the visible warning when `jq` is absent from SwiftBar's PATH, no `set -e`, single colour
+values rather than SwiftBar `light,dark` pairs, `/usr/bin/readlink` by absolute path with `%/*` in
+place of `dirname`. What looks like an accident in there is usually one of those. Recolouring means
+re-checking WCAG contrast against both a white and a dark menu bar — the figures live above
+`state_color`.
 
 SwiftBar's PATH is the recurring trap: it is a GUI app's, not a login shell's, and `/bin` alone has
 neither `readlink` nor `dirname` nor `jq`. The plugin cannot simply pin `PATH`, because that would

@@ -49,13 +49,13 @@ state_rank() {
 # outlive a crashed claude, so trust the process; and a truncated file would
 # abort derive_state's arithmetic on a non-number.
 #
-# The pid ends the subtitle because the title is only the last path segment —
-# two sessions in the same directory would otherwise be two identical rows.
+# The pid ends the subtitle because two unnamed sessions in the same directory
+# fall back to the same title, and would otherwise be two identical rows.
 session_rows() {
   local now=$1
-  local pid sid project status updated state age
+  local pid sid label status updated state age
 
-  while IFS=$'\t' read -r pid sid project status updated; do
+  while IFS=$'\t' read -r pid sid label status updated; do
     [[ -n "$pid" ]] || continue
     kill -0 "$pid" 2>/dev/null || continue
     [[ "$updated" =~ ^[0-9]+$ ]] || continue
@@ -65,7 +65,7 @@ session_rows() {
 
     printf '%s\t%s\t%s %s\t%s · %s · pid %s\t%s\n' \
       "$(state_rank "$state")" "$age" \
-      "$(state_icon "$state")" "$project" \
+      "$(state_icon "$state")" "$label" \
       "$(state_label "$state")" "$(format_age "$age")" "$pid" \
       "$pid"
   done < <(read_sessions)

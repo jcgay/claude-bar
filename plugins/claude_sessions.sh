@@ -133,7 +133,7 @@ most_urgent() {
 }
 
 # One TAB-separated record per interactive session:
-#   pid  sessionId  project  status  statusUpdatedAt
+#   pid  sessionId  label  status  statusUpdatedAt
 #
 # Read straight from the state files rather than calling `claude agents --json`,
 # which spawns the CLI and costs roughly 200ms — far too much at a 2s refresh.
@@ -156,7 +156,17 @@ read_sessions() {
       select(.kind == "interactive")
       | [ .pid,
           .sessionId,
-          (.cwd | split("/") | map(select(. != "")) | last),
+          # Claude Code names every session itself and records in nameSource
+          # where that name came from. "derived" is its own <dir>-<hash>, which
+          # only repeats the directory back with a hash stapled on; "user",
+          # "auto", "hook", "peer" and "collision" are names that carry intent.
+          # Hence blacklisting "derived" rather than whitelisting "user": every
+          # other source is worth showing, including any a later Claude Code
+          # adds. An absent field defaults to "derived" too, so a version too
+          # old to write it keeps showing directories instead of hashes.
+          (if (.nameSource // "derived") == "derived" or (.name // "") == ""
+           then (.cwd | split("/") | map(select(. != "")) | last)
+           else .name end),
           .status,
           .statusUpdatedAt ]
       | @tsv
@@ -170,14 +180,14 @@ render() {
   local now=$1
   local -a states=() rows=()
   local count=0 badges=""
-  local pid sid project status updated state
+  local pid sid label status updated state
 
-  while IFS=$'\t' read -r pid sid project status updated; do
+  while IFS=$'\t' read -r pid sid label status updated; do
     [[ -n "$pid" ]] || continue
     # SwiftBar's line protocol gives `|` meaning (its parameter separator), but
-    # @tsv only escapes tabs and newlines, not `|` — a project directory named
-    # with one would inject bogus parameters and truncate the line.
-    project=${project//|/∣}
+    # @tsv only escapes tabs and newlines, not `|` — a directory or a session
+    # name carrying one would inject bogus parameters and truncate the line.
+    label=${label//|/∣}
     # Session files outlive a crashed claude, so trust the process, not the file.
     kill -0 "$pid" 2>/dev/null || continue
     # A truncated or malformed file must not take down a refresh that runs every
@@ -190,10 +200,10 @@ render() {
 
     # terminal=false keeps the focus script in the background: opening Terminal
     # to run it would steal the focus we are trying to hand to Ghostty.
-    rows+=("$(state_icon "$state") $project — $(state_label "$state") $(format_age "$(( now - updated ))") | color=$(state_color "$state") bash=\"$FOCUS_SCRIPT\" param1=$pid terminal=false")
+    rows+=("$(state_icon "$state") $label — $(state_label "$state") $(format_age "$(( now - updated ))") | color=$(state_color "$state") bash=\"$FOCUS_SCRIPT\" param1=$pid terminal=false")
 
     case "$state" in
-      needs_input|just_finished) badges+="  $(state_icon "$state") $project" ;;
+      needs_input|just_finished) badges+="  $(state_icon "$state") $label" ;;
     esac
   done < <(read_sessions)
 
