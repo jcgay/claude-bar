@@ -1,0 +1,17 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    # macOS only, and not for the plugin's sake: the suite pins `/usr/bin/jq`
+    # and expects `PATH=/bin` to *lack* jq, which holds on macOS and nowhere
+    # else — on Linux /bin is /usr/bin, so the "jq not found" checks would pass
+    # a jq and fail.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: ./test_states.sh
